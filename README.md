@@ -75,7 +75,7 @@ la mise en œuvre réelle — voir addendum section 6).
 ## Roadmap (section 36 du master prompt, adaptée)
 
 - [x] **Phase 1** — squelette du repo (ce commit)
-- [ ] **Phase 2** — backend : auth organisateur (Argon2id, JWT), CRUD événements, sessions invité
+- [x] **Phase 2** — backend : auth organisateur (Argon2id, JWT), CRUD événements, sessions invité
 - [ ] **Phase 3** — stockage objet Scaleway (abstraction S3, presigned URLs)
 - [ ] **Phase 4** — upload photo, validation, Sharp (thumbnail/preview)
 - [ ] **Phase 5** — révélation : gate serveur, `revealAt`, révélation anticipée
@@ -123,73 +123,359 @@ valeurs d'exemple — pas une description vague. C'est ce qui te permet de
 vérifier par toi-même à l'étape 3, plutôt que de deviner la forme des
 requêtes.
 
-## Phase 2 : auth organisateur + CRUD événements
+## Phase 2 : auth organisateur + CRUD événements + sessions invité
 
 Prompt à donner à Claude Code :
 
-> Implémente la Phase 2 du README : auth organisateur (inscription, connexion,
-> refresh token via JWT + Argon2id) et endpoints CRUD `/api/v1/events`, en
-> t'appuyant sur le schéma `apps/api/src/db/schema.ts` déjà en place. Écris les
-> tests de sécurité listés en section 35 du master prompt (un invité ne peut
-> pas agir comme organisateur, token invalide refusé). Lance les tests avant
-> de me confirmer que c'est fait. Termine en me donnant les commandes curl
-> exactes pour tester l'inscription, la connexion, et la création d'un
-> événement, avec de vraies valeurs d'exemple.
+> Implémente la Phase 2 : auth organisateur (inscription email+password,
+> connexion, refresh token — Argon2id pour le hash, JWT access+refresh) et
+> endpoints CRUD `/api/v1/events` (create/list/get/update/delete), protégés
+> par l'auth organisateur. Ajoute aussi la création de session invité :
+> `POST /api/v1/events/:eventId/guest/join` reçoit un `nickname` et un
+> `deviceId` généré côté client, crée une `GuestSession`, retourne un token
+> de session invité — un format ou des claims JWT distincts de ceux de
+> l'organisateur, qui ne doit **jamais** donner les mêmes droits. Appuie-toi
+> sur `apps/api/src/db/schema.ts` déjà en place. Écris les tests de sécurité
+> de la section 35 du master prompt : un token invité ne peut pas agir comme
+> organisateur (créer/modifier un événement), un token invalide ou expiré
+> est rejeté, un eventId inexistant retourne une erreur propre. Lance les
+> tests avant de confirmer. Termine en me donnant les commandes curl exactes
+> (inscription, connexion, création d'événement, jonction invité) avec de
+> vraies valeurs d'exemple.
+
+### Ce qui a été livré en Phase 2
+
+| Route | Auth | Rôle |
+|---|---|---|
+| `POST /api/v1/auth/register` | — | Inscription organisateur (Argon2id) |
+| `POST /api/v1/auth/login` | — | Connexion, renvoie access + refresh |
+| `POST /api/v1/auth/refresh` | — (refresh token dans le corps) | Nouvelle paire de jetons |
+| `GET /api/v1/auth/me` | organisateur | Profil du compte connecté |
+| `POST /api/v1/events` | organisateur | Créer un événement |
+| `GET /api/v1/events` | organisateur | Lister **ses** événements |
+| `GET /api/v1/events/:eventId` | organisateur | Détail d'un de ses événements |
+| `PATCH /api/v1/events/:eventId` | organisateur | Modifier |
+| `DELETE /api/v1/events/:eventId` | organisateur | Supprimer (cascade sessions/photos) |
+| `POST /api/v1/events/:eventId/guest/join` | — (public) | Créer/retrouver une session invité |
+| `GET /api/v1/guest/me` | invité | Vérifier un jeton invité stocké |
+
+Trois familles de jetons, **trois secrets de signature distincts**
+(`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_GUEST_SECRET`), trois
+audiences JWT distinctes et un claim `tkn` explicite. Un jeton invité
+présenté sur une route organisateur échoue dès la vérification de signature :
+il n'existe aucun chemin de code où il produirait un contexte organisateur.
+
+Deux points de configuration nouveaux : `JWT_GUEST_SECRET` doit être renseigné
+dans `.env` (32 caractères minimum, différent des deux autres — l'API refuse de
+démarrer sinon), et **les migrations sont désormais jouées automatiquement au
+démarrage de l'API** (`apps/api/drizzle/`), donc plus besoin de `db:migrate`
+manuel au déploiement.
 
 ### Comment tester la Phase 2 toi-même
 
-Une fois Claude Code terminé, avant de commit/push, lance l'API en local
-(`npm run dev:api`) et vérifie dans l'ordre :
+```bash
+# 0. Les tests automatisés (42 tests, dont ceux de sécurité de la section 35).
+#    Aucun Docker requis : ils tournent sur un Postgres WebAssembly embarqué.
+npm test
+```
 
-1. **La base de données a bien les nouvelles tables** — si Claude Code a
-   modifié `schema.ts`, il doit avoir généré et appliqué une migration :
-   ```bash
-   npm run db:generate
-   npm run db:migrate
-   ```
-   Aucune erreur ne doit apparaître.
+Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:api`) :
 
-2. **Inscription** — utilise la commande curl exacte que Claude Code t'a
-   donnée en fin de tâche (ou adapte celle-ci si les noms de champs
-   diffèrent) :
+1. **Inscription** — renvoie 201 + une session complète :
    ```bash
    curl -X POST http://localhost:3000/api/v1/auth/register \
      -H "Content-Type: application/json" \
-     -d '{"email":"test@example.com","password":"UnMotDePasseSolide123!"}'
+     -d '{"email":"kevin@admemrize.cloud","password":"SouvenirScelle!2026"}'
    ```
-   Doit répondre avec un statut de succès (200/201), pas une erreur 500.
 
-3. **Connexion** — récupère un token :
+2. **Connexion** — note l'`accessToken` renvoyé dans `tokens` :
    ```bash
    curl -X POST http://localhost:3000/api/v1/auth/login \
      -H "Content-Type: application/json" \
-     -d '{"email":"test@example.com","password":"UnMotDePasseSolide123!"}'
+     -d '{"email":"kevin@admemrize.cloud","password":"SouvenirScelle!2026"}'
    ```
-   Doit renvoyer un `accessToken` (et un `refreshToken`) dans la réponse.
 
-4. **Création d'événement, avec le token** — remplace `TON_TOKEN` par la
-   valeur reçue à l'étape 3 :
+3. **Création d'événement** (remplace `TON_ACCESS_TOKEN`) — note l'`id` :
    ```bash
    curl -X POST http://localhost:3000/api/v1/events \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer TON_TOKEN" \
-     -d '{"name":"Mariage Test","type":"MARIAGE","eventDate":"2026-12-20T18:00:00Z","revealAt":"2026-12-20T20:00:00Z","retentionHours":72}'
+     -H "Authorization: Bearer TON_ACCESS_TOKEN" \
+     -d '{"name":"Mariage de Camille et Sofiane","type":"MARIAGE","eventDate":"2026-12-20T18:00:00Z","revealAt":"2026-12-20T23:00:00Z","retentionHours":72}'
    ```
-   Doit renvoyer l'événement créé.
 
-5. **Sans token, ou avec un mauvais token** — doit être refusé :
+4. **Jonction invité** (remplace `EVENT_ID`) — aucun token requis :
    ```bash
-   curl -X POST http://localhost:3000/api/v1/events \
+   curl -X POST http://localhost:3000/api/v1/events/EVENT_ID/guest/join \
      -H "Content-Type: application/json" \
-     -d '{"name":"Ne devrait pas marcher"}'
+     -d '{"nickname":"Tante Jacqueline","deviceId":"device-web-8f2c1a7d9e4b"}'
    ```
-   Doit renvoyer une erreur 401, pas créer d'événement. Si ça crée quand
-   même l'événement, la Phase 2 n'est pas terminée — dis-le à Claude Code
-   avant de continuer, c'est exactement le genre de faille que section 35
-   du master prompt veut éviter.
 
-Phase 2 validée seulement quand les 5 points passent, en local **et** après
-déploiement sur le VPS.
+5. **Sécurité — le jeton invité ne doit PAS créer d'événement** (doit renvoyer
+   401 `INVALID_TOKEN`) :
+   ```bash
+   curl -i -X POST http://localhost:3000/api/v1/events \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer TON_GUEST_TOKEN" \
+     -d '{"name":"Événement pirate","type":"FETE","eventDate":"2026-12-20T18:00:00Z","revealAt":"2026-12-20T23:00:00Z","retentionHours":24}'
+   ```
+
+6. **Erreur propre sur un événement inexistant** (doit renvoyer 404
+   `EVENT_NOT_FOUND`, pas une 500) :
+   ```bash
+   curl -i http://localhost:3000/api/v1/events/00000000-0000-4000-8000-000000000000 \
+     -H "Authorization: Bearer TON_ACCESS_TOKEN"
+   ```
+
+Phase 2 validée quand les 6 points passent, en local **et** après déploiement
+sur le VPS (mêmes commandes contre `https://admemrize.cloud`).
+
+## Phase 3 : stockage objet Scaleway
+
+**Prérequis manuel, avant de lancer Claude Code** (Claude Code ne peut pas
+le faire à ta place) :
+
+1. Crée un compte sur [console.scaleway.com](https://console.scaleway.com).
+2. Crée un bucket Object Storage, région `fr-par`, nom `admemrize-events`,
+   **visibilité privée** (jamais public).
+3. Génère une clé API (Identity → API Keys) avec les droits sur ce bucket.
+4. Renseigne `S3_ACCESS_KEY_ID` et `S3_SECRET_ACCESS_KEY` dans ton `.env`
+   local ET sur le VPS.
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 3 : abstraction de stockage S3-compatible dans
+> `apps/api/src/storage/` (interface générique avec `getUploadUrl`,
+> `getDownloadUrl`, `deleteObject` ; implémentation concrète pour Scaleway
+> via `@aws-sdk/client-s3` et `@aws-sdk/s3-request-presigner`). Structure des
+> clés : `events/{eventId}/originals/`, `events/{eventId}/thumbnails/`,
+> `events/{eventId}/previews/`, `exports/` (section 12 du master prompt).
+> Ajoute `POST /api/v1/uploads/authorize` : vérifie la session (organisateur
+> ou invité), vérifie que l'event est `ACTIVE_LOCKED`, vérifie le quota (500
+> photos/session, 10000/event, configurables), vérifie la taille annoncée
+> (max 15 Mo), puis retourne une URL signée à durée courte pour l'upload
+> direct vers Scaleway — le fichier ne doit jamais transiter par l'API.
+> Écris des tests : quota dépassé refusé, event non `ACTIVE_LOCKED` refusé,
+> taille trop grande refusée, session invalide refusée. Termine en me
+> donnant la commande curl pour demander une URL d'upload, et la commande
+> pour uploader un fichier de test directement vers l'URL signée obtenue.
+
+### Comment tester la Phase 3 toi-même
+
+1. Demande une URL d'upload avec la commande curl donnée par Claude Code
+   (nécessite un token invité ou organisateur valide de la Phase 2).
+2. Upload un fichier de test réel vers l'URL signée reçue (curl `-T` ou
+   `--upload-file`, Claude Code doit te donner la syntaxe exacte).
+3. Va dans la console Scaleway, bucket `admemrize-events` → vérifie que le
+   fichier apparaît bien sous `events/{eventId}/originals/`.
+4. **Sécurité** : essaie d'accéder à ce même fichier par une URL Scaleway
+   directe, sans les paramètres de signature — doit être refusé (le bucket
+   est privé, aucun accès public ne doit fonctionner).
+5. Essaie de demander une URL d'upload pour un event qui n'est pas
+   `ACTIVE_LOCKED` (ex: un event déjà révélé) — doit être refusé.
+
+## Phase 4 : upload photo, validation, Sharp
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 4 : `POST /api/v1/photos/confirm`, appelé après un
+> upload réussi vers Scaleway (Phase 3). Cet endpoint doit : télécharger le
+> fichier depuis le stockage pour le valider réellement en vérifiant les
+> magic bytes (ne jamais faire confiance au Content-Type envoyé par le
+> client — section 14 du master prompt), générer thumbnail et preview via
+> Sharp, les remonter sur Scaleway, enregistrer les métadonnées en base
+> (table `photos`, `status` passe de `PENDING` à `READY` ou `FAILED`).
+> Formats acceptés : JPEG et WebP (pas besoin de HEIC, la capture PWA
+> produit du JPEG — voir `architecture-v1-addendum.md`). Limite 15 Mo. Écris
+> des tests : un fichier renommé en `.jpg` mais qui n'est pas un vrai JPEG
+> est rejeté malgré un Content-Type falsifié, un fichier trop volumineux est
+> rejeté, thumbnail et preview sont bien générés pour un JPEG valide.
+> Termine en me donnant la commande curl complète (upload Phase 3 +
+> confirmation Phase 4) et le chemin exact où je peux vérifier les fichiers
+> générés dans mon bucket Scaleway.
+
+### Comment tester la Phase 4 toi-même
+
+1. Prends une vraie photo JPEG sur ton téléphone/PC, fais le cycle complet
+   upload (Phase 3) → confirm (Phase 4).
+2. Vérifie dans Scaleway que thumbnail ET preview existent, en plus de
+   l'original.
+3. Vérifie en base (`psql` ou un client graphique) que `status = READY`.
+4. **Test du piège** : renomme un fichier `.txt` en `photo.jpg`, tente
+   l'upload + confirm — doit finir en `status = FAILED`, pas en `READY`.
+   C'est la preuve que la vérification par magic bytes fonctionne, pas
+   seulement l'extension du nom de fichier.
+
+## Phase 5 : révélation
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 5 : le gate de révélation côté serveur. Tout endpoint
+> donnant accès aux photos doit vérifier `event.status` ET que `revealAt`
+> est passé, en comparant à l'heure du **serveur** — jamais à une heure
+> envoyée par le client (section 21 du master prompt). Endpoint
+> `POST /api/v1/events/:eventId/reveal` (organisateur uniquement) déclenche
+> la révélation anticipée : passe `status` de `ACTIVE_LOCKED` à `REVEALED`,
+> irréversible, aucune transition inverse possible (section 6). Ajoute aussi
+> un mécanisme qui passe automatiquement un event à `REVEALED` quand
+> `revealAt` est atteint, sans action de l'organisateur (via le worker déjà
+> scaffoldé, ou un check à la volée dans l'API — explique ton choix). Écris
+> des tests : avant reveal, aucune photo accessible même pour
+> l'organisateur ; après reveal, accessible ; appeler `/reveal` deux fois de
+> suite ne casse rien (idempotent) ; impossible de repasser `REVEALED` à
+> `ACTIVE_LOCKED`. Termine en me donnant les commandes curl pour créer un
+> event avec `revealAt` dans le passé (vérifie que les photos sont
+> accessibles) et un avec `revealAt` dans le futur (vérifie qu'elles ne le
+> sont pas).
+
+### Comment tester la Phase 5 toi-même
+
+1. Crée un event avec `revealAt` dans le futur (dans 1h) — vérifie que
+   l'accès aux photos est refusé, même avec le token organisateur.
+2. Crée un deuxième event avec `revealAt` dans le passé — vérifie l'accès.
+3. Déclenche `/reveal` sur le premier event (révélation anticipée) —
+   vérifie que l'accès devient immédiatement possible.
+4. Rappelle `/reveal` une seconde fois sur ce même event — ne doit pas
+   produire d'erreur ni de changement d'état inattendu.
+
+## Phase 6 : expiration
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 6 : le vrai contenu du worker
+> (`apps/worker/src/index.ts`, actuellement un squelette). Il doit chercher
+> les events avec `deleteAt <= now()` ET `status = REVEALED`, puis supprimer
+> dans l'ordre : objets S3 (originaux, previews, thumbnails), exports/ZIP
+> temporaires, métadonnées photo en base, sessions invité, et enfin passer
+> l'event à `EXPIRED` (section 22 du master prompt). La suppression doit
+> être idempotente — si le worker s'interrompt à mi-chemin, la prochaine
+> exécution doit pouvoir reprendre sans erreur ni doublon. Écris un test qui
+> simule un event expiré, lance le sweep, vérifie que tout a disparu (S3 +
+> DB), et qu'un deuxième passage sur le même event déjà `EXPIRED` ne plante
+> pas. Termine en me donnant une commande (script ou requête SQL) pour créer
+> manuellement un event déjà expiré en base à des fins de test, et comment
+> déclencher le worker manuellement pour observer la suppression.
+
+### Comment tester la Phase 6 toi-même
+
+1. Utilise la commande donnée par Claude Code pour créer un event déjà
+   expiré (avec au moins une photo dedans, issue des Phases 3-4).
+2. Déclenche le worker manuellement.
+3. Vérifie dans Scaleway que les fichiers de cet event ont disparu.
+4. Vérifie en base que les lignes `photos` et `guest_sessions` de cet event
+   ont disparu, et que `status = EXPIRED`.
+5. Relance le worker une deuxième fois sur le même event déjà expiré — ne
+   doit produire aucune erreur.
+
+## Phase 7 : PWA invité (capture, offline, upload)
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 7 : le flux invité complet dans
+> `apps/web/src/routes/guest/` (sections 7 à 9 du master prompt). Écran de
+> bienvenue (déjà un placeholder) → saisie du prénom → demande de
+> permission caméra → écran caméra avec capture (`getUserMedia` + rendu sur
+> `<canvas>` + `canvas.toBlob('image/jpeg')` — jamais de fichier HEIC, voir
+> `architecture-v1-addendum.md`) → après capture, animation courte "Souvenir
+> scellé" SANS jamais afficher la photo → écran d'attente avec compteur de
+> photos scellées et compte à rebours avant `revealAt`. Queue offline via
+> `IndexedDB` (utilise `idb-keyval`) qui stocke les photos en attente
+> d'upload (Phases 3-4), avec retry automatique à chaque retour au premier
+> plan de la page — Safari ne supporte pas la Background Sync API, c'est une
+> limite connue et acceptée (voir addendum). Ne supprime jamais la copie
+> locale avant confirmation serveur. Termine en m'expliquant comment simuler
+> une coupure réseau dans Chrome DevTools pour que je teste moi-même la
+> reprise de la queue offline.
+
+### Comment tester la Phase 7 toi-même
+
+1. Ouvre la PWA dans le navigateur, va jusqu'à l'écran caméra, prends une
+   photo — vérifie que l'animation "Souvenir scellé" s'affiche et que la
+   photo n'apparaît **jamais** à l'écran.
+2. Dans Chrome DevTools → onglet Network → passe en mode "Offline", prends
+   2-3 photos supplémentaires — elles doivent rester visibles dans le
+   compteur "photos scellées" sans erreur bloquante.
+3. Repasse en ligne (désactive le mode Offline) — les photos en attente
+   doivent se synchroniser automatiquement en revenant sur l'onglet.
+4. Vérifie côté serveur (Phase 4) que ces photos sont bien arrivées.
+
+## Phase 8 : PWA organisateur (dashboard, QR, settings, reveal)
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 8 : les écrans organisateur dans
+> `apps/web/src/routes/organizer/` (section 25 du master prompt). Home
+> (liste des events), Create Event (nom, type, date, heure de révélation,
+> durée de conservation 24/48/72h/7j), Dashboard (statut, nombre de photos,
+> participants, countdown, accès QR, partage, settings), écran QR (génère le
+> QR avec la lib `qrcode`, affiche le lien, bouton partager via l'API Web
+> Share, téléchargement du QR en haute résolution), Settings (modification
+> avant reveal, bouton "Révéler maintenant" avec les 3 écrans d'avertissement
+> successifs de la section 3 du master prompt — humoristique, plus
+> humoristique, puis sérieux et irréversible — et bouton "Fermer
+> l'événement"). Connecte tout aux endpoints des Phases 2 et 5. Termine en
+> me donnant la liste des routes créées et un scénario clic par clic pour
+> que je teste la création d'un événement de bout en bout dans le
+> navigateur.
+
+### Comment tester la Phase 8 toi-même
+
+Suis le scénario clic par clic donné par Claude Code, en vérifiant
+particulièrement :
+
+1. Un événement créé apparaît bien dans le Dashboard avec le bon countdown.
+2. Le QR généré, scanné avec ton téléphone, ouvre bien le lien invité
+   (`/e/:eventSlug`) de la Phase 7.
+3. Le bouton "Révéler maintenant" affiche bien les 3 écrans successifs, pas
+   moins — et le dernier doit clairement dire que c'est irréversible.
+4. Une fois révélé, le bouton ne doit plus permettre de reverrouiller.
+
+## Phase 9 : galerie post-reveal
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 9 : l'animation de révélation (section 4 du master
+> prompt : écran verrouillé → icône cadenas → déverrouillage → compte à
+> rebours 3-2-1 → "LA CAPSULE S'OUVRE" → transition vers la galerie →
+> nombre de souvenirs révélés) et la galerie elle-même (section 10 : onglets
+> Toutes / Mes photos / Favoris, plein écran, swipe, sélection multiple,
+> téléchargement individuel et multiple). Ajoute
+> `POST /api/v1/photos/:id/favorite` (invité uniquement, sur ses propres
+> favoris). Connecte-toi aux endpoints de la Phase 5 pour la liste des
+> photos. Termine en me donnant un moyen de déclencher l'animation de
+> révélation manuellement dans mon environnement de dev, sans attendre le
+> vrai `revealAt`.
+
+### Comment tester la Phase 9 toi-même
+
+1. Utilise le moyen donné par Claude Code pour déclencher la révélation en
+   dev — regarde l'animation complète, vérifie qu'elle reste courte et
+   fluide (section 4 : "la durée doit rester courte et satisfaisante").
+2. Teste les 3 onglets de la galerie (Toutes / Mes photos / Favoris).
+3. Ajoute et retire un favori, vérifie que ça persiste après rechargement.
+4. Télécharge une photo individuelle, puis une sélection multiple.
+
+## Phase 10 : polish (design, erreurs, notifications)
+
+Prompt à donner à Claude Code :
+
+> Implémente la Phase 10 : direction "Organic Premium" de la section 26 du
+> master prompt (palette ivoire/crème/sable/sauge/terracotta, typographie
+> serif pour les titres, sans-serif pour l'interface), icônes et manifest
+> PWA réels (remplace les placeholders de `vite.config.ts`), gestion des
+> erreurs et des états de chargement sur tous les écrans existants, bannière
+> d'installation iOS ("Partager → Sur l'écran d'accueil", nécessaire pour
+> les notifications — voir addendum), notifications Web Push (VAPID) pour
+> les rappels de la section 29 (optionnelles, activables par
+> l'organisateur). Termine en me donnant la liste des écrans qui n'ont
+> toujours pas d'état de chargement ou d'erreur géré, s'il en reste.
+
+### Comment tester la Phase 10 toi-même
+
+Pas de commande précise ici — c'est la phase la plus visuelle, donc le test
+est humain : parcours chaque écran, coupe le réseau à des moments
+inattendus (vérifie qu'un message d'erreur clair s'affiche, jamais un écran
+blanc ou figé), active les notifications et vérifie qu'elles arrivent bien
+sur mobile.
 
 ## Comment continuer avec Claude Code
 

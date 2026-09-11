@@ -6,6 +6,9 @@ COPY apps/web/package.json apps/web/package.json
 RUN npm install
 COPY packages/shared packages/shared
 COPY apps/web apps/web
+# Le package partagé expose du JS compilé (dist/), pas du TypeScript : il doit
+# être construit avant que Vite ne résolve `@admemrize/shared`.
+RUN npm run build --workspace=@admemrize/shared
 RUN npm run build --workspace=@admemrize/web
 
 FROM caddy:2-alpine
