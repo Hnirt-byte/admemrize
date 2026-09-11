@@ -1,0 +1,79 @@
+name: admemrize
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admemrize
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: admemrize
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    # Aucun "ports:" ici : Postgres n'est joignable que depuis le réseau interne
+    # d'ADMEMRIZE. Ni l'hôte, ni Internet, ni Hermes n'y ont accès.
+
+  admemrize-api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+    networks:
+      - internal # pour parler à postgres
+      - traefik-proxy # joignable par le Traefik partagé du VPS, et accès sortant (Scaleway)
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.admemrize-api.rule=Host(`${ADMEMRIZE_DOMAIN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.admemrize-api.entrypoints=websecure
+      - traefik.http.routers.admemrize-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.admemrize-api.priority=10 # priorité > admemrize-web pour matcher /api avant le catch-all
+      - traefik.http.services.admemrize-api.loadbalancer.server.port=3000
+    # Pas de "ports:" en prod : voir docker-compose.override.yml pour le dev local.
+
+  admemrize-web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    networks:
+      - traefik-proxy # sert uniquement les fichiers statiques de la PWA, jamais accès à internal/postgres
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.admemrize-web.rule=Host(`${ADMEMRIZE_DOMAIN}`)
+      - traefik.http.routers.admemrize-web.entrypoints=websecure
+      - traefik.http.routers.admemrize-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.admemrize-web.priority=1
+      - traefik.http.services.admemrize-web.loadbalancer.server.port=80
+    # Nommage préfixé "admemrize-" pour éviter toute collision de nom de routeur Traefik
+    # avec Hermes ou un futur projet sur le réseau "traefik-proxy" partagé.
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+    networks:
+      - internal # pour parler à postgres
+      - traefik-proxy # accès sortant uniquement (suppression des objets sur Scaleway) ;
+      # jamais de label traefik.enable, donc jamais routé depuis l'extérieur.
+
+networks:
+  internal:
+    driver: bridge
+    internal: true # aucune route vers l'extérieur, même pas via l'hôte
+  traefik-proxy:
+    external: true # créé automatiquement par le template Traefik de Hostinger Docker Manager
+    # C'est le SEUL point de contact entre ADMEMRIZE et le reste du VPS (dont Hermes) :
+    # le Traefik déjà déployé par Hostinger rejoint ce même réseau et route vers
+    # admemrize-api / admemrize-web par leurs labels, sans toucher à la config d'Hermes.
+
+volumes:
+  postgres_data:

@@ -1,0 +1,16 @@
+# Chargé automatiquement par `docker compose up` en local.
+# Sur le VPS, on déploie explicitement avec `docker compose -f docker-compose.yml up -d`
+# pour ignorer ce fichier — c'est ce qui garantit qu'aucun port ne fuite en prod.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432" # lié à localhost uniquement, même en dev
+  admemrize-api:
+    ports:
+      - "127.0.0.1:3000:3000"
+
+networks:
+  traefik-proxy:
+    external: false # en local, pas de Traefik du VPS à rejoindre : Compose crée le réseau lui-même
+    # Les labels Traefik restent inoffensifs en local : sans Traefik qui tourne, personne ne les lit.

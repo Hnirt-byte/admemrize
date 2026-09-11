@@ -1,0 +1,18 @@
+{
+  "name": "admemrize",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "npm run dev --workspace=@admemrize/api",
+    "dev:web": "npm run dev --workspace=@admemrize/web",
+    "dev:worker": "npm run dev --workspace=@admemrize/worker",
+    "db:generate": "npm run db:generate --workspace=@admemrize/api",
+    "db:migrate": "npm run db:migrate --workspace=@admemrize/api"
+  }
+}
