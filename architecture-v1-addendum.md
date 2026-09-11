@@ -109,44 +109,102 @@ une modification à un seul endroit.
 
 ADMEMRIZE et Hermes tournent sur le même VPS Hostinger KVM2, sans serveur
 dédié — via **Hostinger Docker Manager**, qui déploie chaque projet comme un
-`docker-compose.yml` isolé et fournit un projet Traefik partagé (déjà présent
-sur ce VPS, visible en tant que projet `traefik` dans hPanel à côté
-d'`hermes-agent-rrcn`) comme unique point d'entrée HTTPS. Source : [doc
-officielle Hostinger — connecter plusieurs projets Docker Compose via
-Traefik](https://www.hostinger.com/support/connecting-multiple-docker-compose-projects-using-traefik-in-hostinger-docker-manager/)
-(mise à jour fin août 2026).
+`docker-compose.yml` isolé, avec un projet Traefik partagé (déjà présent sur
+ce VPS, visible en tant que projet `traefik` dans hPanel à côté
+d'`hermes-agent-rrcn`) comme unique point d'entrée HTTPS.
 
-Mécanique retenue :
+**Mécanisme réel, vérifié en conditions réelles** (et différent de l'hypothèse
+initiale tirée de la doc générique Hostinger — voir plus bas) : le conteneur
+Traefik de ce VPS tourne en `network_mode: host` (confirmé via `docker
+inspect traefik-traefik-1 --format '{{.HostConfig.NetworkMode}}'`). Il
+partage donc directement la pile réseau de l'hôte, ce qui lui donne une route
+locale vers **tous** les réseaux bridge Docker de la machine — pas besoin
+qu'un réseau soit "externe" ou explicitement partagé. C'est déjà comme ça
+qu'il atteint Hermes, qui vit sur son propre réseau isolé
+`hermes-agent-rrcn_default` sans aucun réseau commun avec Traefik.
 
-- **Réseau `internal`** (`internal: true`) : Postgres seul. Aucune route
-  sortante, même pas vers Internet. Techniquement injoignable depuis Hermes,
-  pas seulement par convention.
-- **Réseau `traefik-proxy`** : réseau externe déjà créé par le template
-  Traefik de Hostinger. Seuls `admemrize-api` et `admemrize-web` le
-  rejoignent, avec des labels Docker (`traefik.enable`, `traefik.http.routers.*`)
-  qui indiquent à Traefik quel domaine router vers quel port — sans éditer
-  aucune config partagée ni toucher à Hermes.
+Conséquence pratique : `docker-compose.yml` d'ADMEMRIZE n'a pas besoin de
+réseau `external: true` ni d'étape de création manuelle. Deux réseaux
+Compose standards suffisent :
+
+- **`internal`** (`internal: true`) : Postgres seul. Aucune route sortante
+  vers Internet.
+- **`public`** : `admemrize-api` et `admemrize-web`, avec les labels Docker
+  (`traefik.enable`, `traefik.http.routers.*`) qui indiquent à Traefik quel
+  domaine router vers quel port — sans éditer aucune config partagée ni
+  toucher à Hermes.
+
+**Correction honnête sur la portée réelle de l'isolation** (une première
+version de ce document affirmait que Postgres serait injoignable "même pas
+via l'hôte" — c'était trop fort, corrigé ici) : `internal: true` empêche
+Postgres de sortir vers Internet et empêche d'autres conteneurs Docker
+classiques (dont Hermes) de le joindre — cette garantie tient. Mais un
+processus qui partage la pile réseau de l'hôte, comme ce Traefik
+spécifiquement, a par construction une route locale vers ce réseau, `internal:
+true` ou non — ce flag régit la sortie vers Internet, pas l'accès depuis
+l'hôte lui-même. Risque résiduel assumé : si Traefik était compromis (déjà le
+composant le plus exposé du VPS par construction), il aurait une route réseau
+vers Postgres, mais pas son mot de passe, jamais présent dans sa config.
+Aucune action corrective supplémentaire prise pour la V1 (pinner l'accès
+Postgres à une IP de conteneur précise serait fragile, les IP internes
+Docker n'étant pas garanties stables au redémarrage) — documenté ici pour que
+la décision soit explicite, pas silencieuse.
+
 - **Aucun reverse proxy dans le compose d'ADMEMRIZE** : Traefik est déjà
   déployé par Hostinger, pas besoin d'en ajouter un deuxième qui entrerait en
   conflit sur les ports 80/443.
 - **La PWA reste un conteneur à part** (`admemrize-web`, Caddy interne sans
   TLS, jamais publié sur l'hôte) qui sert les fichiers statiques ; Traefik
   fait uniquement le routage HTTPS vers lui.
-- **Point à vérifier avant déploiement** : le nom du certresolver
-  (`letsencrypt` dans le pattern documenté par Hostinger) doit correspondre à
-  celui réellement configuré sur cette instance — se confirme en inspectant
-  les labels du conteneur `hermes-agent-rrcn`, qui fonctionne déjà (commande
-  dans le README).
+- **Certresolver confirmé** : `letsencrypt`, vérifié en inspectant les labels
+  du conteneur `hermes-agent-rrcn-hermes-agent-1`, qui fonctionne déjà en
+  production sur ce Traefik.
 - **Dev vs prod** : `docker-compose.override.yml` (jamais déployé sur le VPS)
-  expose Postgres/API sur `127.0.0.1` et neutralise le caractère externe du
-  réseau `traefik-proxy` pour le confort du développement local.
+  expose Postgres/API sur `127.0.0.1` pour le confort du développement local.
 
 Cette segmentation ne coûte rien à la portabilité future (section "critère
 de réussite commercial" du master prompt) : le repo ADMEMRIZE ne référence
-Hermes nulle part, seulement un réseau Docker nommé `traefik-proxy` — sur un
-futur VPS dédié, il suffit d'y déployer n'importe quel Traefik (via le même
-template Hostinger ou manuellement) pour reproduire exactement ce montage.
+Hermes nulle part, et ne dépend même plus d'un réseau externe pré-existant —
+sur un futur VPS, `docker compose up` recrée tout automatiquement, qu'un
+Traefik en mode host y tourne déjà ou non (il suffira d'adapter le mécanisme
+de découverte si le nouveau Traefik n'est pas en `network_mode: host`).
 
-## 7. Prochaine étape
+## 8. Leçons du déploiement V1 réel (VPS Hostinger)
+
+Phase 1 validée en production le 11 septembre 2026 (`https://admemrize.cloud`).
+Trois causes distinctes ont dû être diagnostiquées avant que ça tienne debout
+— utile de les garder en mémoire pour les phases suivantes :
+
+1. **`node:22-alpine` vs `node:22-slim`** : un `package-lock.json` généré sur
+   une plateforme glibc, utilisé dans un build Docker Alpine (musl), fait
+   échouer Rollup/Vite (`Cannot find module @rollup/rollup-linux-x64-musl`).
+   Correctif : image `slim` (glibc) pour le stage de build qui utilise Vite.
+2. **Réseau Traefik externe inexistant** : la doc générique Hostinger suppose
+   un réseau `external: true` partagé. Sur ce VPS, Traefik tourne en
+   `network_mode: host` (confirmé via `docker inspect ... NetworkMode`) — il
+   atteint nativement tout réseau bridge du VPS, aucun réseau externe à créer.
+   Un réseau `public` (bridge standard, non-external) suffit.
+3. **Certresolver déclaré en double** : `admemrize-api` et `admemrize-web`
+   déclaraient chacun `tls.certresolver=letsencrypt` pour le même domaine —
+   deux demandes ACME concurrentes pour le même nom, source probable
+   d'échecs répétés ("Cannot retrieve the ACME challenge"). Un seul routeur
+   par domaine doit posséder le `certresolver` ; les autres utilisent
+   `tls=true` seul, le certificat déjà obtenu s'applique automatiquement par
+   nom de domaine (SNI), pas par routeur.
+4. **La vraie dernière cause, la plus bête** : `.env` sur le VPS pas
+   resynchronisé après une correction — `ADMEMRIZE_DOMAIN` gardait encore le
+   placeholder `admemrize.ton-domaine.fr` alors que le code source était
+   déjà correct. Symptôme trompeur : 404 Traefik + certificat auto-signé
+   "TRAEFIK DEFAULT CERT", qui ressemble à un problème ACME alors que c'est
+   un routeur qui ne matche simplement rien.
+
+**Méthode qui a permis de trancher sans deviner à l'infini** : à chaque
+hypothèse, vérifier ce que Traefik/Docker voit *réellement*
+(`docker inspect ... --format '{{json .Config.Labels}}'`, `docker logs`,
+`curl -v`) plutôt que supposer qu'un fichier édité a été pris en compte. Un
+outil externe (`letsdebug.net`) a permis d'éliminer une fausse piste (IPv6)
+avec une preuve plutôt qu'une intuition.
+
+## 9. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.
