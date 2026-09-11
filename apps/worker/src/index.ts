@@ -1,4 +1,11 @@
-import "dotenv/config";
+import { config } from "dotenv";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+// Même cause qu'côté API : npm workspaces exécute ce script depuis apps/worker/,
+// dotenv/config chercherait .env au mauvais endroit sans ce chemin explicite.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(__dirname, "../../../.env") });
 
 // Squelette du worker d'expiration (section 22 du cahier des charges).
 // Boucle simple, pas de Redis : recherche deleteAt <= now AND status = REVEALED,

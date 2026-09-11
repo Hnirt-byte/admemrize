@@ -205,6 +205,33 @@ hypothèse, vérifier ce que Traefik/Docker voit *réellement*
 outil externe (`letsdebug.net`) a permis d'éliminer une fausse piste (IPv6)
 avec une preuve plutôt qu'une intuition.
 
-## 9. Prochaine étape
+## 10. Dette technique connue (à reconsidérer plus tard, pas bloquant V1)
+
+- **Refresh tokens sans table de révocation** (Phase 2) : la rotation émet un
+  nouveau couple, mais l'ancien refresh token reste valide jusqu'à son
+  expiration naturelle (30 j) — pas de déconnexion à distance immédiate en
+  cas de vol. Acceptable au risque V1 (app de photos de mariage, pas de
+  données bancaires), à revoir si le produit devient commercial : ajouter
+  une table `refresh_tokens` avec statut révocable.
+- **Pas d'index sur `events.owner_id` ni de contrainte unique sur
+  `guest_sessions(event_id, device_id)`** (Phase 2, `schema.ts` volontairement
+  non modifié) : sans conséquence au volume V1. La contrainte unique absente
+  laisse une théorique race condition sur une jonction invité en double clic
+  rapide/retry réseau — improbable, pas grave si ça arrive (une session en
+  trop, pas une faille de sécurité), mais à corriger si ça devient gênant.
+
+5. **`internal: true` bloque aussi la publication de port, pas seulement la
+   sortie Internet** (découvert en dev local Windows) : ajouter `ports:`
+   dans `docker-compose.override.yml` sur un service resté sur le réseau
+   `internal` ne suffit pas — Docker ne peut pas câbler la redirection NAT
+   hôte→conteneur sur un réseau volontairement privé de toute route externe.
+   L'override doit aussi neutraliser le flag lui-même (`internal: false`)
+   pour ce contexte de dev, la vraie isolation ne s'appliquant qu'en prod
+   (sans cet override). Symptôme trompeur : `docker compose config` affiche
+   la config fusionnée comme correcte, seul `docker port <conteneur>` (vide
+   au lieu d'afficher le mapping) révèle l'écart entre l'intention déclarée
+   et ce que Docker peut réellement faire.
+
+## 11. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.

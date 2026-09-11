@@ -2,6 +2,13 @@
 # Sur le VPS, on déploie explicitement avec `docker compose -f docker-compose.yml up -d`
 # pour ignorer ce fichier — c'est ce qui garantit qu'aucun port ne fuite en prod.
 
+networks:
+  internal:
+    internal: false # nécessaire en dev local : "internal: true" empêche aussi
+    # la publication de port vers l'hôte (pas seulement la sortie Internet),
+    # donc "ports:" ci-dessous ne peut pas fonctionner tant que ce flag tient.
+    # La vraie isolation ne s'applique qu'en prod, sans cet override.
+
 services:
   postgres:
     ports:
