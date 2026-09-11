@@ -13,7 +13,12 @@ services:
     networks:
       - internal
     # Aucun "ports:" ici : Postgres n'est joignable que depuis le réseau interne
-    # d'ADMEMRIZE. Ni l'hôte, ni Internet, ni Hermes n'y ont accès.
+    # d'ADMEMRIZE. Hermes (autre projet Docker) n'y a aucune route.
+    # Nuance : sur ce VPS, Traefik tourne en network_mode host — il a donc, comme
+    # l'hôte lui-même, une route locale directe vers ce réseau malgré "internal: true"
+    # (qui bloque la sortie Internet, pas l'accès depuis l'hôte). Postgres reste
+    # protégé par son mot de passe, jamais connu de Traefik. Voir section 6 de
+    # architecture-v1-addendum.md pour le détail de ce compromis assumé.
 
   admemrize-api:
     build:
@@ -25,7 +30,8 @@ services:
       - postgres
     networks:
       - internal # pour parler à postgres
-      - traefik-proxy # joignable par le Traefik partagé du VPS, et accès sortant (Scaleway)
+      - public # accès sortant Internet (Scaleway) ; Traefik (host network) atteint ce
+      # conteneur directement via ce réseau, sans qu'il ait besoin d'être "partagé"
     labels:
       - traefik.enable=true
       - traefik.http.routers.admemrize-api.rule=Host(`${ADMEMRIZE_DOMAIN}`) && PathPrefix(`/api`)
@@ -41,7 +47,7 @@ services:
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
     networks:
-      - traefik-proxy # sert uniquement les fichiers statiques de la PWA, jamais accès à internal/postgres
+      - public # sert uniquement les fichiers statiques de la PWA, jamais accès à internal/postgres
     labels:
       - traefik.enable=true
       - traefik.http.routers.admemrize-web.rule=Host(`${ADMEMRIZE_DOMAIN}`)
@@ -50,7 +56,7 @@ services:
       - traefik.http.routers.admemrize-web.priority=1
       - traefik.http.services.admemrize-web.loadbalancer.server.port=80
     # Nommage préfixé "admemrize-" pour éviter toute collision de nom de routeur Traefik
-    # avec Hermes ou un futur projet sur le réseau "traefik-proxy" partagé.
+    # avec Hermes ou un futur projet découvert par le même Traefik.
 
   worker:
     build:
@@ -62,18 +68,19 @@ services:
       - postgres
     networks:
       - internal # pour parler à postgres
-      - traefik-proxy # accès sortant uniquement (suppression des objets sur Scaleway) ;
+      - public # accès sortant uniquement (suppression des objets sur Scaleway) ;
       # jamais de label traefik.enable, donc jamais routé depuis l'extérieur.
 
 networks:
   internal:
     driver: bridge
-    internal: true # aucune route vers l'extérieur, même pas via l'hôte
-  traefik-proxy:
-    external: true # créé automatiquement par le template Traefik de Hostinger Docker Manager
-    # C'est le SEUL point de contact entre ADMEMRIZE et le reste du VPS (dont Hermes) :
-    # le Traefik déjà déployé par Hostinger rejoint ce même réseau et route vers
-    # admemrize-api / admemrize-web par leurs labels, sans toucher à la config d'Hermes.
+    internal: true # aucune route sortante vers Internet pour Postgres
+  public:
+    driver: bridge
+    # Réseau bridge Compose standard, créé et géré automatiquement — PAS "external".
+    # Traefik (network_mode: host sur ce VPS) atteint ce réseau nativement, sans
+    # qu'il ait besoin d'exister au préalable ni d'être partagé explicitement :
+    # exactement comme il atteint déjà Hermes sur son propre réseau isolé.
 
 volumes:
   postgres_data:
