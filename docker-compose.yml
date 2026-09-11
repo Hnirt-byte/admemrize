@@ -36,7 +36,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.admemrize-api.rule=Host(`${ADMEMRIZE_DOMAIN}`) && PathPrefix(`/api`)
       - traefik.http.routers.admemrize-api.entrypoints=websecure
-      - traefik.http.routers.admemrize-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.admemrize-api.tls=true
       - traefik.http.routers.admemrize-api.priority=10 # priorité > admemrize-web pour matcher /api avant le catch-all
       - traefik.http.services.admemrize-api.loadbalancer.server.port=3000
     # Pas de "ports:" en prod : voir docker-compose.override.yml pour le dev local.
