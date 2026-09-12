@@ -160,6 +160,38 @@ export const GuestJoinResponse = z.object({
 export type GuestJoinResponse = z.infer<typeof GuestJoinResponse>;
 
 // ---------------------------------------------------------------------------
+// Upload de photos (Phase 3)
+// ---------------------------------------------------------------------------
+
+// Capture toujours en JPEG côté client (canvas.toBlob), voir
+// architecture-v1-addendum.md section 2 : jamais de HEIC ni d'autre format à
+// gérer côté serveur.
+export const UPLOAD_CONTENT_TYPE = "image/jpeg" as const;
+
+// 15 Mo (section 12 du master prompt) : une photo JPEG issue d'un canvas web ne
+// s'en approche pas en pratique, la marge absorbe les gros capteurs.
+export const MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024;
+
+export const AuthorizeUploadInput = z.object({
+  // Requis uniquement pour un appel organisateur : un jeton invité porte déjà
+  // son eventId, un eventId fourni dans le corps est alors ignoré (voir
+  // routes/uploads.ts).
+  eventId: z.uuid().optional(),
+  sizeBytes: z.number().int().positive(),
+});
+export type AuthorizeUploadInput = z.infer<typeof AuthorizeUploadInput>;
+
+export const AuthorizeUploadResponse = z.object({
+  photoId: z.uuid(),
+  uploadUrl: z.string(),
+  method: z.literal("PUT"),
+  key: z.string(),
+  contentType: z.literal(UPLOAD_CONTENT_TYPE),
+  expiresAt: IsoDateTime,
+});
+export type AuthorizeUploadResponse = z.infer<typeof AuthorizeUploadResponse>;
+
+// ---------------------------------------------------------------------------
 // Erreurs
 // ---------------------------------------------------------------------------
 

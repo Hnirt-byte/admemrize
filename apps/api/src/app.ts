@@ -13,18 +13,21 @@ import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerGuestRoutes } from "./routes/guest.js";
+import { registerUploadRoutes } from "./routes/uploads.js";
+import type { ObjectStorage } from "./storage/types.js";
 import type { AppInstance } from "./types.js";
 
 export interface BuildAppOptions {
   db: Database;
   env: Env;
+  storage: ObjectStorage;
   /** Désactivable pour que les tests ne se heurtent pas au quota anti-force brute. */
   enableRateLimit?: boolean;
   logger?: boolean;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
-  const { db, env } = options;
+  const { db, env, storage } = options;
 
   const app = Fastify({
     logger: options.logger ?? env.NODE_ENV !== "test",
@@ -76,6 +79,7 @@ export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
   registerAuthRoutes(app, deps);
   registerEventRoutes(app, deps);
   registerGuestRoutes(app, deps);
+  registerUploadRoutes(app, { ...deps, storage });
 
   return app;
 }

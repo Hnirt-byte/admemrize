@@ -36,6 +36,24 @@ export const EnvSchema = z
     APP_NAME: z.string().default("ADMEMRIZE"),
     APP_DOMAIN: z.string().default("http://localhost:5173"),
     API_PORT: z.coerce.number().int().positive().default(3000),
+
+    // Stockage objet S3-compatible (Scaleway Object Storage, région Paris) —
+    // voir architecture-v1-addendum.md section 1. Pas de défaut : un endpoint ou
+    // des identifiants manquants doivent faire échouer le boot, pas produire une
+    // API qui signe des URL vers un bucket "undefined".
+    S3_ENDPOINT: z.string().min(1),
+    S3_REGION: z.string().min(1),
+    S3_BUCKET: z.string().min(1),
+    S3_ACCESS_KEY_ID: z.string().min(1),
+    S3_SECRET_ACCESS_KEY: z.string().min(1),
+
+    // Durée de vie de l'URL signée d'upload : courte, puisqu'elle ne sert qu'à
+    // l'envoi direct qui suit immédiatement /uploads/authorize (section 12).
+    UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+
+    // Quotas anti-abus, configurables sans déploiement de code (section 12).
+    SESSION_PHOTO_QUOTA: z.coerce.number().int().positive().default(500),
+    EVENT_PHOTO_QUOTA: z.coerce.number().int().positive().default(10_000),
   })
   .superRefine((env, ctx) => {
     const secrets = [

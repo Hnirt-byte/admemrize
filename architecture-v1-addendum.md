@@ -232,6 +232,27 @@ avec une preuve plutôt qu'une intuition.
    au lieu d'afficher le mapping) révèle l'écart entre l'intention déclarée
    et ce que Docker peut réellement faire.
 
+6. **`POSTGRES_PASSWORD` ne s'applique qu'à la toute première initialisation
+   du volume de données** : changer cette variable dans `.env` n'a aucun
+   effet sur un Postgres déjà initialisé — il faut soit `ALTER USER` en SQL
+   (si des données existent), soit supprimer le volume (`docker volume rm`,
+   acceptable seulement sans données réelles à perdre). Symptôme observé :
+   `password authentication failed` malgré des identifiants strictement
+   identiques entre `POSTGRES_PASSWORD` et `DATABASE_URL`.
+
+7. **`sizeBytes` non vérifié à l'upload réel** (Phase 3) : `/uploads/authorize`
+   valide la taille *annoncée* par le client avant de délivrer l'URL signée,
+   mais une URL PUT S3 signée standard n'impose pas elle-même que le fichier
+   envoyé fasse cette taille — rien n'empêche d'annoncer une petite taille
+   puis d'uploader un fichier bien plus gros directement vers Scaleway, hors
+   du contrôle de l'API. La limite de 15 Mo (section 13 du master prompt)
+   n'est donc pour l'instant qu'une déclaration sur l'honneur. **À corriger
+   en Phase 4** : puisque cette phase télécharge déjà le fichier pour
+   vérifier les magic bytes, elle doit aussi vérifier la taille réelle de
+   l'objet à ce moment-là (HeadObject ou taille du buffer téléchargé) et
+   rejeter/supprimer si elle dépasse la limite — ne pas se contenter de
+   valider le format.
+
 ## 11. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.

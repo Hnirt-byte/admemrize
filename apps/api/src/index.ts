@@ -13,11 +13,13 @@ import { buildApp } from "./app.js";
 import { createDatabase } from "./db/client.js";
 import { runMigrations } from "./db/migrate.js";
 import { loadEnv } from "./env.js";
+import { createObjectStorage } from "./storage/index.js";
 
 const env = loadEnv();
 const database = createDatabase(env.DATABASE_URL);
+const storage = createObjectStorage(env);
 
-const app = await buildApp({ db: database.db, env });
+const app = await buildApp({ db: database.db, env, storage });
 
 try {
   await runMigrations(database.db);

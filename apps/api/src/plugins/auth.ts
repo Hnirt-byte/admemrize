@@ -119,3 +119,30 @@ export function requireGuest(deps: AuthDeps): preHandlerAsyncHookHandler {
     };
   };
 }
+
+/**
+ * Garde des routes accessibles aux deux rôles (ex. /uploads/authorize : un
+ * organisateur peut aussi capturer des photos pendant son propre événement).
+ * Tente d'abord le jeton invité, puis l'organisateur : l'audience JWT propre à
+ * chaque famille de jeton (voir lib/tokens.ts) fait échouer la première
+ * tentative immédiatement si le jeton présenté n'est pas de ce type, sans
+ * jamais produire les deux contextes à la fois.
+ */
+export function requireOrganizerOrGuest(
+  deps: AuthDeps
+): preHandlerAsyncHookHandler {
+  const guestGuard = requireGuest(deps);
+  const organizerGuard = requireOrganizer(deps);
+
+  // Fonction classique (pas une flèche) : `this` doit rester le FastifyInstance
+  // que Fastify lie à l'appel du preHandler, pour le retransmettre tel quel aux
+  // deux gardes tentées tour à tour.
+  return async function (request, reply) {
+    try {
+      await guestGuard.call(this, request, reply);
+      return;
+    } catch {
+      await organizerGuard.call(this, request, reply);
+    }
+  };
+}

@@ -7,12 +7,18 @@ import { MIGRATIONS_FOLDER } from "../src/db/migrate.js";
 import * as schema from "../src/db/schema.js";
 import { buildApp } from "../src/app.js";
 import { EnvSchema, type Env } from "../src/env.js";
+import { ScalewayObjectStorage } from "../src/storage/scaleway-s3.js";
+import type { ObjectStorage } from "../src/storage/types.js";
 import type { AppInstance } from "../src/types.js";
 
 /**
  * Environnement de test. Les trois secrets sont distincts, comme l'exige
  * EnvSchema : les tests tournent donc avec exactement la même séparation
  * cryptographique qu'en production.
+ *
+ * Quotas volontairement bas (au lieu des 500/10000 par défaut) : les tests de
+ * dépassement de quota insèrent des lignes `photos` directement en base, pas
+ * la peine d'en créer des centaines pour déclencher le même comportement.
  */
 export const testEnv: Env = EnvSchema.parse({
   NODE_ENV: "test",
@@ -22,7 +28,31 @@ export const testEnv: Env = EnvSchema.parse({
   JWT_GUEST_SECRET: "test-guest-secret-ccccccccccccccccccccccccc",
   APP_NAME: "ADMEMRIZE",
   APP_DOMAIN: "http://localhost:5173",
+  S3_ENDPOINT: "https://s3.fr-par.scw.cloud",
+  S3_REGION: "fr-par",
+  S3_BUCKET: "admemrize-events-test",
+  S3_ACCESS_KEY_ID: "test-access-key-id",
+  S3_SECRET_ACCESS_KEY: "test-secret-access-key",
+  SESSION_PHOTO_QUOTA: 3,
+  EVENT_PHOTO_QUOTA: 5,
 });
+
+/**
+ * `getSignedUrl` est un calcul cryptographique local (aucun appel réseau vers
+ * Scaleway) : la même implémentation qu'en production peut donc signer des URL
+ * de test avec des identifiants fictifs, sans mock ni double de test à
+ * maintenir. Seul `deleteObject` ferait un vrai appel réseau — aucun test ne
+ * l'exerce pour l'instant.
+ */
+export function createTestStorage(): ObjectStorage {
+  return new ScalewayObjectStorage({
+    endpoint: testEnv.S3_ENDPOINT,
+    region: testEnv.S3_REGION,
+    bucket: testEnv.S3_BUCKET,
+    accessKeyId: testEnv.S3_ACCESS_KEY_ID,
+    secretAccessKey: testEnv.S3_SECRET_ACCESS_KEY,
+  });
+}
 
 export interface TestContext {
   app: AppInstance;
@@ -57,6 +87,7 @@ export async function createTestContext(): Promise<TestContext> {
   const app = await buildApp({
     db,
     env: testEnv,
+    storage: createTestStorage(),
     enableRateLimit: false,
     logger: false,
   });
