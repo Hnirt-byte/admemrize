@@ -9,12 +9,14 @@ import type { Database } from "../db/client.js";
 import { events, favorites, guestSessions, photos } from "../db/schema.js";
 import { badRequest, notFound } from "../lib/errors.js";
 import { requireOrganizer, type AuthDeps } from "../plugins/auth.js";
+import { purgeEventObjects } from "../services/expiration.js";
 import {
   assertStillLocked,
   resolveDueRevealsForOwner,
   resolveEventReveal,
   revealEventNow,
 } from "../services/reveal.js";
+import type { ObjectStorage } from "../storage/types.js";
 import type { AppInstance } from "../types.js";
 
 const EventParams = z.object({ eventId: z.uuid() });
@@ -67,7 +69,11 @@ function assertRevealInFuture(revealAt: Date): void {
   }
 }
 
-export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
+export interface EventDeps extends AuthDeps {
+  storage: ObjectStorage;
+}
+
+export function registerEventRoutes(app: AppInstance, deps: EventDeps): void {
   const organizerOnly = requireOrganizer(deps);
 
   app.post(
@@ -236,10 +242,16 @@ export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
         request.params.eventId
       );
 
+      // Les fichiers partent avant la base, dans le même ordre que
+      // l'expiration automatique (services/expiration.ts) : si la suppression
+      // s'interrompt entre les deux, l'événement existe encore et
+      // l'organisateur peut réessayer. Dans l'ordre inverse, les objets
+      // deviendraient orphelins sur Scaleway, sans plus aucune ligne pour dire
+      // qu'ils existent — donc sans plus rien pour les supprimer un jour.
+      await purgeEventObjects(deps.storage, existing.id);
+
       // Suppression en cascade explicite, dans une transaction : l'événement et
       // tout ce qui y pend disparaissent ensemble ou pas du tout.
-      // Les objets S3 correspondants seront nettoyés par la couche stockage
-      // (Phase 3) ; en Phase 2 aucune photo n'existe encore.
       await deps.db.transaction(async (tx) => {
         const eventPhotos = tx
           .select({ id: photos.id })

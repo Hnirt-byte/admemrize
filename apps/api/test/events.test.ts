@@ -1,18 +1,26 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createEvent,
+  createFakeObjectStorage,
   createTestContext,
   daysFromNow,
   joinAsGuest,
   registerOrganizer,
+  type FakeObjectStorage,
   type TestContext,
 } from "./helpers.js";
 
 let ctx: TestContext;
+let storage: FakeObjectStorage;
 let organizer: Awaited<ReturnType<typeof registerOrganizer>>;
 
 beforeAll(async () => {
-  ctx = await createTestContext();
+  // Stockage en mémoire : depuis la Phase 6, DELETE /events/:eventId purge
+  // aussi les objets de l'événement (services/expiration.ts), ce qui touche
+  // réellement la couche de stockage.
+  storage = createFakeObjectStorage();
+  ctx = await createTestContext({ storage });
   organizer = await registerOrganizer(ctx.app);
 });
 
@@ -131,6 +139,24 @@ describe("CRUD événements", () => {
       headers: { authorization: `Bearer ${guest.guestToken}` },
     });
     expect(jetonInvite.statusCode).toBe(401);
+  });
+
+  it("emporte aussi les fichiers de l'événement (Phase 6)", async () => {
+    const event = await createEvent(ctx.app, organizer.accessToken);
+    const cle = `events/${event.id}/originals/${randomUUID()}.jpg`;
+    storage.seed(cle, Buffer.from("photo"), "image/jpeg");
+
+    const deletion = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/v1/events/${event.id}`,
+      headers: auth(),
+    });
+
+    expect(deletion.statusCode).toBe(204);
+    // Sans cette purge, les objets survivraient à la ligne `events` qui les
+    // désignait — plus rien en base pour dire qu'ils existent, donc plus rien
+    // pour les supprimer un jour.
+    expect(storage.has(cle)).toBe(false);
   });
 
   it("interdit de modifier ou supprimer l'événement d'un autre organisateur", async () => {

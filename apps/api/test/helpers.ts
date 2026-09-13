@@ -41,8 +41,9 @@ export const testEnv: Env = EnvSchema.parse({
  * `getSignedUrl` est un calcul cryptographique local (aucun appel réseau vers
  * Scaleway) : la même implémentation qu'en production peut donc signer des URL
  * de test avec des identifiants fictifs, sans mock ni double de test à
- * maintenir. Seul `deleteObject` ferait un vrai appel réseau — aucun test ne
- * l'exerce pour l'instant.
+ * maintenir. Toutes les autres méthodes (headObject, getObject, putObject,
+ * listObjects, deleteObject(s)) feraient de vrais appels réseau : un test qui
+ * emprunte une route les utilisant doit passer `createFakeObjectStorage()`.
  */
 export function createTestStorage(): ObjectStorage {
   return new ScalewayObjectStorage({
@@ -123,6 +124,8 @@ export interface FakeObjectStorage extends ObjectStorage {
   seed(key: string, body: Buffer, contentType?: string): void;
   has(key: string): boolean;
   get(key: string): { body: Buffer; contentType: string } | undefined;
+  /** Tout ce que contient encore le bucket de test — pratique pour prouver qu'il est vide. */
+  keys(): string[];
 }
 
 /**
@@ -153,6 +156,16 @@ export function createFakeObjectStorage(): FakeObjectStorage {
     async deleteObject(key) {
       objects.delete(key);
     },
+    async listObjects(prefix) {
+      return [...objects.keys()].filter((key) => key.startsWith(prefix));
+    },
+    async deleteObjects(keys) {
+      // Comme S3 : supprimer une clé absente réussit. C'est ce qui rend un
+      // balayage d'expiration interrompu rejouable tel quel.
+      for (const key of keys) {
+        objects.delete(key);
+      }
+    },
     async headObject(key) {
       const object = objects.get(key);
       return object
@@ -177,6 +190,9 @@ export function createFakeObjectStorage(): FakeObjectStorage {
     },
     get(key) {
       return objects.get(key);
+    },
+    keys() {
+      return [...objects.keys()];
     },
   };
 }

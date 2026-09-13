@@ -63,6 +63,20 @@ export const EnvSchema = z
       .positive()
       .default(900),
 
+    // Rythme du worker d'expiration (apps/worker). 5 minutes : la granularité
+    // n'a pas besoin d'être fine — `deleteAt` est une promesse de suppression,
+    // pas une échéance à la seconde comme `revealAt`, et aucun accès n'est
+    // possible entre-temps (le gate refuse déjà un événement échu).
+    EXPIRATION_SWEEP_INTERVAL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300),
+
+    // Nombre maximum d'événements traités par passage : borne la durée d'un
+    // balayage en cas de retard accumulé, le reste attend le passage suivant.
+    EXPIRATION_SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(100),
+
     // Quotas anti-abus, configurables sans déploiement de code (section 12).
     SESSION_PHOTO_QUOTA: z.coerce.number().int().positive().default(500),
     EVENT_PHOTO_QUOTA: z.coerce.number().int().positive().default(10_000),

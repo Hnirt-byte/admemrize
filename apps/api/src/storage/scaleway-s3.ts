@@ -1,7 +1,9 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -14,6 +16,9 @@ import type {
   UploadUrlRequest,
   UploadUrlResult,
 } from "./types.js";
+
+// Maximum de clés par appel DeleteObjects dans l'API S3.
+const DELETE_BATCH_SIZE = 1000;
 
 export interface ScalewayStorageConfig {
   endpoint: string;
@@ -32,7 +37,8 @@ export interface ScalewayStorageConfig {
  * La génération d'URL signée (`getSignedUrl`) est un calcul cryptographique
  * local — aucun appel réseau n'est fait vers Scaleway pour émettre une URL, ce
  * qui rend `getUploadUrl`/`getDownloadUrl` testables hors ligne avec des
- * identifiants fictifs. Seul `deleteObject` effectue un vrai appel réseau.
+ * identifiants fictifs. Toutes les autres méthodes font de vrais appels
+ * réseau ; les tests leur substituent le double en mémoire de test/helpers.ts.
  */
 export class ScalewayObjectStorage implements ObjectStorage {
   private readonly client: S3Client;
@@ -93,6 +99,63 @@ export class ScalewayObjectStorage implements ObjectStorage {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key })
     );
+  }
+
+  /** Parcourt toutes les pages : un événement peut dépasser les 1000 clés d'une réponse. */
+  async listObjects(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        })
+      );
+
+      for (const object of page.Contents ?? []) {
+        if (object.Key) keys.push(object.Key);
+      }
+
+      // `IsTruncated` seul ne suffit pas : sans jeton de continuation, boucler
+      // redemanderait indéfiniment la même première page.
+      continuationToken = page.IsTruncated
+        ? page.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+
+    return keys;
+  }
+
+  async deleteObjects(keys: string[]): Promise<void> {
+    for (let start = 0; start < keys.length; start += DELETE_BATCH_SIZE) {
+      const batch = keys.slice(start, start + DELETE_BATCH_SIZE);
+
+      const result = await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: batch.map((key) => ({ Key: key })), Quiet: true },
+        })
+      );
+
+      // DeleteObjects renvoie un 200 même quand certaines clés ont échoué : les
+      // erreurs sont dans le corps, pas dans le statut HTTP. Sans ce contrôle,
+      // l'expiration se croirait terminée en laissant des fichiers derrière
+      // elle, et passerait l'événement à EXPIRED — donc hors de portée du
+      // prochain balayage.
+      const errors = result.Errors ?? [];
+      if (errors.length > 0) {
+        const detail = errors
+          .slice(0, 3)
+          .map((error) => `${error.Key} (${error.Code})`)
+          .join(", ");
+        throw new Error(
+          `Échec de suppression de ${errors.length} objet(s) : ${detail}`
+        );
+      }
+    }
   }
 
   /**

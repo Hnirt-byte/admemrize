@@ -49,6 +49,23 @@ export interface ObjectStorage {
   getUploadUrl(request: UploadUrlRequest): Promise<UploadUrlResult>;
   getDownloadUrl(request: DownloadUrlRequest): Promise<DownloadUrlResult>;
   deleteObject(key: string): Promise<void>;
+  /**
+   * Toutes les clés sous un préfixe, pagination comprise (Phase 6).
+   *
+   * C'est ce qui permet à l'expiration de supprimer ce que la base ne connaît
+   * pas : un fichier envoyé via une URL signée dont la confirmation n'est
+   * jamais arrivée (/uploads/authorize n'écrit aucune ligne, seul
+   * /photos/confirm le fait) existe dans le bucket sans ligne `photos` en
+   * face. Supprimer uniquement les clés listées en base le laisserait sur
+   * Scaleway pour toujours.
+   */
+  listObjects(prefix: string): Promise<string[]>;
+  /**
+   * Suppression en lot. Idempotente comme `deleteObject` : S3 ne distingue pas
+   * une clé supprimée d'une clé qui n'a jamais existé, les deux réussissent —
+   * c'est ce qui rend un balayage interrompu rejouable tel quel.
+   */
+  deleteObjects(keys: string[]): Promise<void>;
   /** Métadonnées de l'objet sans télécharger son contenu, ou `null` s'il n'existe pas. */
   headObject(key: string): Promise<HeadObjectResult | null>;
   /** Télécharge le contenu complet de l'objet. */

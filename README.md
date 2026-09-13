@@ -24,7 +24,7 @@ npm run db:migrate
 # 5. Lancer chaque service dans un terminal séparé
 npm run dev:api      # http://localhost:3000/api/v1/health
 npm run dev:web      # http://localhost:5173
-npm run dev:worker
+npm run dev:worker   # boucle d'expiration (npm run sweep pour un passage unique)
 ```
 
 ## Structure
@@ -79,7 +79,7 @@ la mise en œuvre réelle — voir addendum section 6).
 - [x] **Phase 3** — stockage objet Scaleway (abstraction S3, presigned URLs)
 - [x] **Phase 4** — upload photo, validation, Sharp (thumbnail/preview)
 - [x] **Phase 5** — révélation : gate serveur, `revealAt`, révélation anticipée
-- [ ] **Phase 6** — expiration : implémentation réelle du worker, suppression idempotente
+- [x] **Phase 6** — expiration : implémentation réelle du worker, suppression idempotente
 - [ ] **Phase 7** — PWA invité : capture caméra, queue offline, upload
 - [ ] **Phase 8** — PWA organisateur : dashboard, QR, settings, déclenchement reveal
 - [ ] **Phase 9** — galerie post-reveal : animation, onglets, téléchargement
@@ -433,6 +433,74 @@ Prompt à donner à Claude Code :
    ont disparu, et que `status = EXPIRED`.
 5. Relance le worker une deuxième fois sur le même event déjà expiré — ne
    doit produire aucune erreur.
+
+### Ce que fait le worker (Phase 6)
+
+Pilotage dans [`apps/worker/src/index.ts`](apps/worker/src/index.ts), suppression
+dans [`apps/api/src/services/expiration.ts`](apps/api/src/services/expiration.ts)
+— le worker importe le service de l'API (`@admemrize/api/services/expiration`)
+au lieu de redéclarer un accès aux tables, pour qu'il n'existe qu'une seule
+définition de "ce que contient un événement".
+
+Critère de recherche : `deleteAt <= now()` **ET** `status <> 'EXPIRED'`. Ordre de
+suppression : objets Scaleway (originaux, aperçus, vignettes, exports ZIP) →
+favoris → photos → sessions invité → `status = EXPIRED`. La ligne `events`
+survit, vidée : c'est elle qui permet de répondre 410 à un vieux lien invité.
+
+Les fichiers partent avant la base, jamais l'inverse : une interruption entre les
+deux laisse l'événement non-EXPIRED, donc repris au passage suivant. Chaque
+événement est traité isolément — un bucket qui refuse une suppression ne retient
+pas les autres.
+
+### Créer un événement déjà expiré, à la main
+
+L'API refuse un `deleteAt` passé (il se déduit de `revealAt`, qui doit être dans
+le futur). On antidate donc la ligne après coup. Crée d'abord un événement
+normalement, avec au moins une photo dedans (Phases 3-4), puis :
+
+```bash
+# Antidate le dernier événement créé, en le laissant ACTIVE_LOCKED : c'est le
+# cas que la révélation paresseuse de la Phase 5 rend possible (personne ne l'a
+# consulté après son revealAt), et il doit quand même être supprimé.
+docker compose exec -T postgres psql -U admemrize -d admemrize -c \
+  "UPDATE events SET delete_at = now() - interval '1 hour'
+   WHERE id = (SELECT id FROM events ORDER BY created_at DESC LIMIT 1)
+   RETURNING id, name, status, delete_at;"
+```
+
+### Déclencher le worker à la main
+
+```bash
+# En dev local (un seul passage, puis sortie ; code 1 si un événement a échoué)
+npm run sweep
+
+# En prod, dans le conteneur worker
+docker compose exec worker node apps/worker/dist/sweep-once.js
+
+# Ou simplement observer la boucle, qui tourne toutes les 5 minutes
+docker compose logs -f worker
+```
+
+Sortie attendue sur un événement contenant une photo :
+
+```
+[worker] 2026-01-01T12:00:00.000Z 1 événement(s) échu(s) à supprimer
+[worker] 2026-01-01T12:00:00.412Z Événement <uuid> expiré : 3 objet(s), 1 photo(s), 1 session(s)
+[worker] 2026-01-01T12:00:00.415Z Passage terminé : 1/1 événement(s) expiré(s), 3 objet(s) et 1 photo(s) supprimé(s), 0 en échec
+```
+
+Vérifier ensuite, sans faire confiance au journal :
+
+```bash
+docker compose exec -T postgres psql -U admemrize -d admemrize -c \
+  "SELECT status FROM events WHERE id = '<uuid>';
+   SELECT count(*) AS photos FROM photos WHERE event_id = '<uuid>';
+   SELECT count(*) AS sessions FROM guest_sessions WHERE event_id = '<uuid>';"
+```
+
+Puis dans la console Scaleway, que `events/<uuid>/` et `exports/<uuid>/` ont
+disparu. Relance `npm run sweep` une seconde fois : l'événement est désormais
+EXPIRED, il ne fait plus partie des candidats, et le passage ne fait rien.
 
 ## Phase 7 : PWA invité (capture, offline, upload)
 

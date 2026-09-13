@@ -323,6 +323,44 @@ avec une preuve plutôt qu'une intuition.
     dans le futur — l'affichage d'un compte à rebours doit se décider sur le
     **statut**, jamais sur une comparaison de dates faite dans le navigateur.
 
+12. **Le worker importe le service d'expiration de l'API plutôt que de
+    redéclarer un accès aux tables** (Phase 6) : `apps/worker` dépend de
+    `@admemrize/api` et n'importe que quatre sous-chemins exportés
+    (`/env`, `/db`, `/storage`, `/services/expiration`) — jamais la racine, dont
+    l'import démarrerait un second serveur Fastify. La logique de suppression
+    vit donc dans `apps/api/src/services/expiration.ts`, comme le prévoyait déjà
+    l'arborescence de la section 3, avec le schéma Drizzle et l'abstraction de
+    stockage qu'elle utilise, et y est testée contre un vrai Postgres (PGlite).
+    Raison : du code de suppression qui aurait sa propre idée de ce que contient
+    un événement est exactement le code qu'on ne veut pas voir diverger du
+    reste. Conséquences assumées : `apps/api/tsconfig.json` génère désormais ses
+    déclarations (`declaration: true`), et l'image Docker du worker construit
+    aussi l'API. Alternative écartée pour la V1 : extraire un paquet
+    `packages/server-core` partagé — plus propre, mais un remaniement des
+    Phases 2 à 5 sans bénéfice fonctionnel immédiat.
+
+13. **Suppression par préfixe, pas par clés connues en base** (Phase 6) :
+    l'expiration liste `events/{id}/` et `exports/{id}/` sur le stockage et
+    supprime tout ce qu'elle y trouve, au lieu de supprimer les clés
+    enregistrées dans la table `photos`. Motif : `/uploads/authorize` délivre
+    une URL signée sans écrire de ligne (la ligne n'apparaît qu'à
+    `/photos/confirm`), donc un fichier envoyé par un client qui ne confirme
+    jamais existe dans le bucket sans aucune trace en base. Supprimer les seules
+    clés connues le laisserait sur Scaleway indéfiniment. Deux méthodes ajoutées
+    à `ObjectStorage` pour cela : `listObjects(prefix)` et `deleteObjects(keys)`.
+    Corollaire : `exportKey()` prend maintenant un `eventId` et range les ZIP
+    sous `exports/{eventId}/` au lieu de `exports/{filename}` à plat — à plat,
+    un export était impossible à rattacher à son événement, donc impossible à
+    supprimer avec lui (à respecter en Phase 9, qui crée ces ZIP).
+
+14. **`DELETE /api/v1/events/:eventId` purge aussi le stockage** (Phase 6) : la
+    route de suppression manuelle ne supprimait que les lignes en base, avec un
+    commentaire renvoyant à une Phase ultérieure. C'était sans conséquence tant
+    qu'aucune photo n'existait ; depuis la Phase 4, cela laissait des objets
+    orphelins que plus aucune ligne ne désignait — donc que plus rien n'aurait
+    jamais supprimés. Elle appelle désormais `purgeEventObjects()`, le même code
+    que l'expiration automatique, dans le même ordre (fichiers avant base).
+
 ## 11. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.

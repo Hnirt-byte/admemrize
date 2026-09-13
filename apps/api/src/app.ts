@@ -78,7 +78,7 @@ export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
   );
 
   registerAuthRoutes(app, deps);
-  registerEventRoutes(app, deps);
+  registerEventRoutes(app, { ...deps, storage });
   registerGuestRoutes(app, deps);
   registerUploadRoutes(app, { ...deps, storage });
   registerPhotoRoutes(app, { ...deps, storage });

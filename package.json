@@ -12,8 +12,9 @@
     "build:shared": "npm run build --workspace=@admemrize/shared",
     "dev:api": "npm run build:shared && npm run dev --workspace=@admemrize/api",
     "dev:web": "npm run build:shared && npm run dev --workspace=@admemrize/web",
-    "dev:worker": "npm run dev --workspace=@admemrize/worker",
     "build:api": "npm run build:shared && npm run build --workspace=@admemrize/api",
+    "dev:worker": "npm run build:api && npm run dev --workspace=@admemrize/worker",
+    "sweep": "npm run build:api && npm run sweep --workspace=@admemrize/worker",
     "test": "npm run build:shared && npm run test --workspace=@admemrize/api",
     "db:generate": "npm run db:generate --workspace=@admemrize/api",
     "db:migrate": "npm run db:migrate --workspace=@admemrize/api"
