@@ -8,6 +8,7 @@ import {
 import { and, count, eq, ne } from "drizzle-orm";
 import { events, photos } from "../db/schema.js";
 import { badRequest, conflict, notFound } from "../lib/errors.js";
+import { resolveOrganizerGuestSessionId } from "../lib/organizer-guest-session.js";
 import { requireOrganizerOrGuest, type AuthDeps } from "../plugins/auth.js";
 import { originalKey } from "../storage/keys.js";
 import type { ObjectStorage } from "../storage/types.js";
@@ -31,7 +32,7 @@ export function registerUploadRoutes(app: AppInstance, deps: UploadDeps): void {
     {
       // Un invité déclenche cette route à chaque photo prise pendant tout
       // l'événement : quota généreux, resserré par les contrôles métier
-      // ci-dessous (event verrouillé, quotas de photos).
+      // ci-dessous (event non expiré, quotas de photos).
       config: { rateLimit: { max: 120, timeWindow: "10 minutes" } },
       preHandler: requireOrganizerOrGuest(deps),
       schema: {
@@ -47,7 +48,6 @@ export function registerUploadRoutes(app: AppInstance, deps: UploadDeps): void {
         );
       }
 
-      const guestSessionId = request.guest?.guestSessionId;
       const eventId = request.guest
         ? request.guest.eventId
         : request.body.eventId;
@@ -78,12 +78,31 @@ export function registerUploadRoutes(app: AppInstance, deps: UploadDeps): void {
         throw notFound("Événement introuvable.", "EVENT_NOT_FOUND");
       }
 
-      if (event.status !== "ACTIVE_LOCKED") {
+      // Aligné sur /photos/confirm (Phase 4) : une confirmation tardive reste
+      // acceptée après révélation (promesse offline-first — addendum section 1,
+      // ligne "Photo uploadée après revealAt"), donc l'autorisation d'upload
+      // qui la précède doit l'être aussi. Un invité dont le téléphone se
+      // reconnecte juste après la révélation (event passé en REVEALED pendant
+      // qu'il était hors ligne) doit pouvoir envoyer une photo prise avant.
+      // Seule l'expiration ferme définitivement la porte.
+      if (event.status === "EXPIRED") {
         throw conflict(
-          "Cet événement n'accepte plus de nouvelles photos pour le moment.",
-          "EVENT_NOT_ACTIVE_LOCKED"
+          "Cet événement est expiré, aucune nouvelle photo ne peut être envoyée.",
+          "EVENT_EXPIRED"
         );
       }
+
+      // Un organisateur qui capture pendant son propre événement est traité
+      // comme un invité de son propre événement pour tout ce qui touche aux
+      // photos (`photos.guest_session_id` reste NOT NULL) : auto-provisionné
+      // au premier appel, réutilisé ensuite — voir lib/organizer-guest-session.ts.
+      const guestSessionId = request.guest
+        ? request.guest.guestSessionId
+        : await resolveOrganizerGuestSessionId(
+            deps.db,
+            request.organizer!,
+            event
+          );
 
       // Limite connue (même esprit que la dette technique documentée en
       // section 10 de l'addendum) : ce compteur ne voit que les photos déjà
@@ -92,22 +111,20 @@ export function registerUploadRoutes(app: AppInstance, deps: UploadDeps): void {
       // enchaînerait des appels à /uploads/authorize sans jamais uploader
       // n'est pas ralenti par ce quota — seul un usage normal (une demande par
       // photo réellement envoyée) est couvert ici.
-      if (guestSessionId) {
-        const [{ value: sessionCount }] = await deps.db
-          .select({ value: count() })
-          .from(photos)
-          .where(
-            and(
-              eq(photos.guestSessionId, guestSessionId),
-              ne(photos.status, "DELETED")
-            )
-          );
-        if (sessionCount >= deps.env.SESSION_PHOTO_QUOTA) {
-          throw conflict(
-            `Quota de ${deps.env.SESSION_PHOTO_QUOTA} photos atteint pour cette session.`,
-            "SESSION_QUOTA_EXCEEDED"
-          );
-        }
+      const [{ value: sessionCount }] = await deps.db
+        .select({ value: count() })
+        .from(photos)
+        .where(
+          and(
+            eq(photos.guestSessionId, guestSessionId),
+            ne(photos.status, "DELETED")
+          )
+        );
+      if (sessionCount >= deps.env.SESSION_PHOTO_QUOTA) {
+        throw conflict(
+          `Quota de ${deps.env.SESSION_PHOTO_QUOTA} photos atteint pour cette session.`,
+          "SESSION_QUOTA_EXCEEDED"
+        );
       }
 
       const [{ value: eventCount }] = await deps.db

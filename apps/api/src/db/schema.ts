@@ -75,6 +75,10 @@ export const photos = pgTable("photos", {
   eventId: uuid("event_id")
     .notNull()
     .references(() => events.id),
+  // NOT NULL, y compris pour un organisateur qui capture pendant son propre
+  // événement : lib/organizer-guest-session.ts lui auto-provisionne une
+  // GuestSession au premier appel, il est traité comme un invité de son
+  // propre événement pour tout ce qui touche aux photos.
   guestSessionId: uuid("guest_session_id")
     .notNull()
     .references(() => guestSessions.id),

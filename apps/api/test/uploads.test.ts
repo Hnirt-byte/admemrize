@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, guestSessions, photos } from "../src/db/schema.js";
 import {
@@ -77,6 +77,36 @@ describe("POST /api/v1/uploads/authorize", () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it("auto-provisionne une session invité pour l'organisateur, réutilisée d'un appel à l'autre", async () => {
+    const event = await createEvent(ctx.app, organizer.accessToken);
+
+    const first = await authorize(organizer.accessToken, {
+      eventId: event.id,
+      sizeBytes: 1000,
+    });
+    const second = await authorize(organizer.accessToken, {
+      eventId: event.id,
+      sizeBytes: 1000,
+    });
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+
+    // Une seule session auto-provisionnée pour cet organisateur sur cet
+    // événement, pas une par appel — `photos.guest_session_id` reste NOT
+    // NULL, l'organisateur est traité comme un invité de son propre
+    // événement (lib/organizer-guest-session.ts).
+    const sessions = await ctx.db
+      .select()
+      .from(guestSessions)
+      .where(
+        and(
+          eq(guestSessions.eventId, event.id),
+          eq(guestSessions.deviceId, `organizer:${organizer.organizerId}`)
+        )
+      );
+    expect(sessions).toHaveLength(1);
+  });
+
   it("refuse l'événement d'un autre organisateur (404, jamais 403)", async () => {
     const victime = await registerOrganizer(ctx.app);
     const event = await createEvent(ctx.app, victime.accessToken);
@@ -134,7 +164,29 @@ describe("POST /api/v1/uploads/authorize", () => {
     expect(response.json().error.code).toBe("BAD_REQUEST");
   });
 
-  it("refuse un upload tant que l'événement n'est pas ACTIVE_LOCKED", async () => {
+  // Avant : refusé tant que l'événement n'était pas ACTIVE_LOCKED. Corrigé
+  // pour autoriser aussi REVEALED, exactement comme /photos/confirm (Phase 4)
+  // — un invité dont le téléphone se reconnecte juste après la révélation
+  // doit pouvoir envoyer une photo prise hors ligne avant. Seule l'expiration
+  // ferme désormais la porte ; voir le test suivant pour le cas REVEALED.
+  it("refuse un upload une fois l'événement expiré", async () => {
+    const event = await createEvent(ctx.app, organizer.accessToken);
+    const guest = await joinAsGuest(ctx.app, event.id, {
+      deviceId: "device-upload-expire-000001",
+    });
+
+    await ctx.db
+      .update(events)
+      .set({ status: "EXPIRED" })
+      .where(eq(events.id, event.id));
+
+    const response = await authorize(guest.guestToken, { sizeBytes: 1000 });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("EVENT_EXPIRED");
+  });
+
+  it("autorise un upload sur un événement déjà REVEALED (reconnexion tardive après révélation, promesse offline-first)", async () => {
     const event = await createEvent(ctx.app, organizer.accessToken);
     const guest = await joinAsGuest(ctx.app, event.id, {
       deviceId: "device-upload-revele-000001",
@@ -147,8 +199,8 @@ describe("POST /api/v1/uploads/authorize", () => {
 
     const response = await authorize(guest.guestToken, { sizeBytes: 1000 });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error.code).toBe("EVENT_NOT_ACTIVE_LOCKED");
+    expect(response.statusCode).toBe(201);
+    expect(response.json().key).toBe(`events/${event.id}/originals/${response.json().photoId}.jpg`);
   });
 
   it("refuse un upload au-delà du quota de photos par session", async () => {

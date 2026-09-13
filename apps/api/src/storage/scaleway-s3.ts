@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -8,6 +9,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type {
   DownloadUrlRequest,
   DownloadUrlResult,
+  HeadObjectResult,
   ObjectStorage,
   UploadUrlRequest,
   UploadUrlResult,
@@ -92,4 +94,62 @@ export class ScalewayObjectStorage implements ObjectStorage {
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key })
     );
   }
+
+  /**
+   * Vérifie la taille réelle de l'objet sans le télécharger (dette technique
+   * documentée en Phase 3, à corriger ici — addendum section 10, point 7) :
+   * une URL PUT signée n'impose pas elle-même la taille annoncée à
+   * /uploads/authorize, rien n'empêche d'envoyer un fichier plus gros
+   * directement à Scaleway, hors du contrôle de l'API.
+   */
+  async headObject(key: string): Promise<HeadObjectResult | null> {
+    try {
+      const result = await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key })
+      );
+      return {
+        contentLength: result.ContentLength ?? 0,
+        contentType: result.ContentType,
+      };
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async getObject(key: string): Promise<Buffer> {
+    const result = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key })
+    );
+    const bytes = await result.Body!.transformToByteArray();
+    return Buffer.from(bytes);
+  }
+
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string
+  ): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      })
+    );
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const name = "name" in error ? (error as { name?: unknown }).name : undefined;
+  const statusCode =
+    "$metadata" in error
+      ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+          ?.httpStatusCode
+      : undefined;
+  return name === "NotFound" || name === "NoSuchKey" || statusCode === 404;
 }

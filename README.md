@@ -76,7 +76,7 @@ la mise en œuvre réelle — voir addendum section 6).
 
 - [x] **Phase 1** — squelette du repo (ce commit)
 - [x] **Phase 2** — backend : auth organisateur (Argon2id, JWT), CRUD événements, sessions invité
-- [ ] **Phase 3** — stockage objet Scaleway (abstraction S3, presigned URLs)
+- [x] **Phase 3** — stockage objet Scaleway (abstraction S3, presigned URLs)
 - [ ] **Phase 4** — upload photo, validation, Sharp (thumbnail/preview)
 - [ ] **Phase 5** — révélation : gate serveur, `revealAt`, révélation anticipée
 - [ ] **Phase 6** — expiration : implémentation réelle du worker, suppression idempotente
@@ -145,19 +145,19 @@ Prompt à donner à Claude Code :
 
 ### Ce qui a été livré en Phase 2
 
-| Route | Auth | Rôle |
-|---|---|---|
-| `POST /api/v1/auth/register` | — | Inscription organisateur (Argon2id) |
-| `POST /api/v1/auth/login` | — | Connexion, renvoie access + refresh |
-| `POST /api/v1/auth/refresh` | — (refresh token dans le corps) | Nouvelle paire de jetons |
-| `GET /api/v1/auth/me` | organisateur | Profil du compte connecté |
-| `POST /api/v1/events` | organisateur | Créer un événement |
-| `GET /api/v1/events` | organisateur | Lister **ses** événements |
-| `GET /api/v1/events/:eventId` | organisateur | Détail d'un de ses événements |
-| `PATCH /api/v1/events/:eventId` | organisateur | Modifier |
-| `DELETE /api/v1/events/:eventId` | organisateur | Supprimer (cascade sessions/photos) |
-| `POST /api/v1/events/:eventId/guest/join` | — (public) | Créer/retrouver une session invité |
-| `GET /api/v1/guest/me` | invité | Vérifier un jeton invité stocké |
+| Route                                     | Auth                            | Rôle                                |
+| ----------------------------------------- | ------------------------------- | ----------------------------------- |
+| `POST /api/v1/auth/register`              | —                               | Inscription organisateur (Argon2id) |
+| `POST /api/v1/auth/login`                 | —                               | Connexion, renvoie access + refresh |
+| `POST /api/v1/auth/refresh`               | — (refresh token dans le corps) | Nouvelle paire de jetons            |
+| `GET /api/v1/auth/me`                     | organisateur                    | Profil du compte connecté           |
+| `POST /api/v1/events`                     | organisateur                    | Créer un événement                  |
+| `GET /api/v1/events`                      | organisateur                    | Lister **ses** événements           |
+| `GET /api/v1/events/:eventId`             | organisateur                    | Détail d'un de ses événements       |
+| `PATCH /api/v1/events/:eventId`           | organisateur                    | Modifier                            |
+| `DELETE /api/v1/events/:eventId`          | organisateur                    | Supprimer (cascade sessions/photos) |
+| `POST /api/v1/events/:eventId/guest/join` | — (public)                      | Créer/retrouver une session invité  |
+| `GET /api/v1/guest/me`                    | invité                          | Vérifier un jeton invité stocké     |
 
 Trois familles de jetons, **trois secrets de signature distincts**
 (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_GUEST_SECRET`), trois
@@ -182,6 +182,7 @@ npm test
 Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:api`) :
 
 1. **Inscription** — renvoie 201 + une session complète :
+
    ```bash
    curl -X POST http://localhost:3000/api/v1/auth/register \
      -H "Content-Type: application/json" \
@@ -189,6 +190,7 @@ Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:ap
    ```
 
 2. **Connexion** — note l'`accessToken` renvoyé dans `tokens` :
+
    ```bash
    curl -X POST http://localhost:3000/api/v1/auth/login \
      -H "Content-Type: application/json" \
@@ -196,6 +198,7 @@ Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:ap
    ```
 
 3. **Création d'événement** (remplace `TON_ACCESS_TOKEN`) — note l'`id` :
+
    ```bash
    curl -X POST http://localhost:3000/api/v1/events \
      -H "Content-Type: application/json" \
@@ -204,6 +207,7 @@ Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:ap
    ```
 
 4. **Jonction invité** (remplace `EVENT_ID`) — aucun token requis :
+
    ```bash
    curl -X POST http://localhost:3000/api/v1/events/EVENT_ID/guest/join \
      -H "Content-Type: application/json" \
@@ -212,6 +216,7 @@ Puis, API lancée en local (`docker compose up -d postgres` puis `npm run dev:ap
 
 5. **Sécurité — le jeton invité ne doit PAS créer d'événement** (doit renvoyer
    401 `INVALID_TOKEN`) :
+
    ```bash
    curl -i -X POST http://localhost:3000/api/v1/events \
      -H "Content-Type: application/json" \

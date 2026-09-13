@@ -60,12 +60,25 @@ export interface TestContext {
   close: () => Promise<void>;
 }
 
+export interface CreateTestContextOptions {
+  /**
+   * Par défaut, le vrai adaptateur Scaleway (URL signées calculées
+   * localement, sans appel réseau — voir createTestStorage). Les tests qui
+   * ont besoin de contenu d'objet réel (Phase 4 : headObject/getObject/
+   * putObject, qui font de vrais appels réseau contre Scaleway) doivent
+   * passer `createFakeObjectStorage()` ici à la place.
+   */
+  storage?: ObjectStorage;
+}
+
 /**
  * Monte l'API complète sur un Postgres réel compilé en WebAssembly (PGlite) :
  * mêmes migrations, mêmes types, mêmes contraintes d'intégrité qu'en production,
  * sans dépendre de Docker sur la machine de dev.
  */
-export async function createTestContext(): Promise<TestContext> {
+export async function createTestContext(
+  options: CreateTestContextOptions = {}
+): Promise<TestContext> {
   const pg = new PGlite();
   const db = drizzle(pg, { schema }) as unknown as Database;
 
@@ -87,7 +100,7 @@ export async function createTestContext(): Promise<TestContext> {
   const app = await buildApp({
     db,
     env: testEnv,
-    storage: createTestStorage(),
+    storage: options.storage ?? createTestStorage(),
     enableRateLimit: false,
     logger: false,
   });
@@ -99,6 +112,71 @@ export async function createTestContext(): Promise<TestContext> {
     close: async () => {
       await app.close();
       await pg.close();
+    },
+  };
+}
+
+// --- Stockage en mémoire (Phase 4) ------------------------------------------
+
+export interface FakeObjectStorage extends ObjectStorage {
+  /** Dépose un objet directement, pour simuler un upload direct déjà réussi vers Scaleway (Phase 3). */
+  seed(key: string, body: Buffer, contentType?: string): void;
+  has(key: string): boolean;
+  get(key: string): { body: Buffer; contentType: string } | undefined;
+}
+
+/**
+ * Double de test en mémoire pour ObjectStorage. `ScalewayObjectStorage` fait
+ * de vrais appels réseau pour headObject/getObject/putObject (contrairement à
+ * getUploadUrl/getDownloadUrl, un simple calcul cryptographique local) : pas
+ * utilisable en test unitaire sans identifiants Scaleway réels. Ce double
+ * permet aux tests de "seed" un contenu comme s'il avait déjà été uploadé,
+ * puis de vérifier ce que la route de confirmation y dépose.
+ */
+export function createFakeObjectStorage(): FakeObjectStorage {
+  const objects = new Map<string, { body: Buffer; contentType: string }>();
+
+  return {
+    async getUploadUrl(request) {
+      return {
+        url: `https://fake-storage.test/${request.key}`,
+        method: "PUT",
+        expiresAt: new Date(Date.now() + request.expiresInSeconds * 1000),
+      };
+    },
+    async getDownloadUrl(request) {
+      return {
+        url: `https://fake-storage.test/${request.key}`,
+        expiresAt: new Date(Date.now() + request.expiresInSeconds * 1000),
+      };
+    },
+    async deleteObject(key) {
+      objects.delete(key);
+    },
+    async headObject(key) {
+      const object = objects.get(key);
+      return object
+        ? { contentLength: object.body.byteLength, contentType: object.contentType }
+        : null;
+    },
+    async getObject(key) {
+      const object = objects.get(key);
+      if (!object) {
+        throw new Error(`Objet introuvable dans le stockage de test: ${key}`);
+      }
+      return object.body;
+    },
+    async putObject(key, body, contentType) {
+      objects.set(key, { body, contentType });
+    },
+    seed(key, body, contentType = "application/octet-stream") {
+      objects.set(key, { body, contentType });
+    },
+    has(key) {
+      return objects.has(key);
+    },
+    get(key) {
+      return objects.get(key);
     },
   };
 }

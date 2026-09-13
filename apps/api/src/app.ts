@@ -13,6 +13,7 @@ import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerGuestRoutes } from "./routes/guest.js";
+import { registerPhotoRoutes } from "./routes/photos.js";
 import { registerUploadRoutes } from "./routes/uploads.js";
 import type { ObjectStorage } from "./storage/types.js";
 import type { AppInstance } from "./types.js";
@@ -80,6 +81,7 @@ export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
   registerEventRoutes(app, deps);
   registerGuestRoutes(app, deps);
   registerUploadRoutes(app, { ...deps, storage });
+  registerPhotoRoutes(app, { ...deps, storage });
 
   return app;
 }

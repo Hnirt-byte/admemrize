@@ -252,6 +252,48 @@ avec une preuve plutôt qu'une intuition.
    l'objet à ce moment-là (HeadObject ou taille du buffer téléchargé) et
    rejeter/supprimer si elle dépasse la limite — ne pas se contenter de
    valider le format.
+   **Corrigé en Phase 4** : `POST /api/v1/photos/confirm`
+   (`routes/photos.ts`) appelle `storage.headObject()` avant tout
+   téléchargement — un objet au-delà de `MAX_UPLOAD_SIZE_BYTES` est supprimé
+   du bucket et la photo passe en `FAILED`, sans jamais télécharger son
+   contenu ni générer de dérivé.
+
+8. **`/uploads/authorize` exigeait `ACTIVE_LOCKED`, incohérent avec la ligne
+   "Photo uploadée après `revealAt`" du tableau en section 1** (Phase 3,
+   corrigé après coup) : la Phase 3 livrée bloquait toute nouvelle demande
+   d'URL d'upload dès qu'un événement passait à `REVEALED`, alors que la
+   promesse produit est qu'une photo capturée hors ligne avant la révélation
+   ne doit jamais se perdre à cause du réseau — y compris quand le téléphone
+   de l'invité ne se reconnecte qu'après coup. `routes/uploads.ts` et
+   `routes/photos.ts` (Phase 4) utilisent désormais la même règle : refusé
+   uniquement si `status === "EXPIRED"`, accepté pour `ACTIVE_LOCKED` et
+   `REVEALED`. Le test qui vérifiait l'ancien comportement
+   (`apps/api/test/uploads.test.ts`) a été ajusté pour couvrir `EXPIRED` au
+   lieu de `REVEALED`, avec un test symétrique ajouté qui prouve que
+   `REVEALED` est maintenant accepté.
+
+9. **Organisateur traité comme un invité de son propre événement pour les
+   photos, plutôt que `photos.guest_session_id` nullable** (Phase 4, décision
+   revue après coup) : une première version rendait cette colonne nullable
+   pour permettre à un organisateur de confirmer une photo sans session
+   invité. Revenu en arrière — `guest_session_id` reste NOT NULL sans
+   exception, aucune photo en base sans session. À la place,
+   `lib/organizer-guest-session.ts` auto-provisionne silencieusement une
+   `GuestSession` au premier appel d'un organisateur à `/uploads/authorize` ou
+   `/photos/confirm` sur son propre événement (nickname dérivé de la partie
+   locale de son email, `deviceId` synthétique déterministe
+   `organizer:{userId}` qui sert aussi de clé de réutilisation, `tokenHash`
+   aléatoire sans rapport avec un jeton réel — cette session n'est jamais
+   joignable via `requireGuest`, l'organisateur continue de s'authentifier
+   uniquement par son propre jeton). Conséquence assumée : les photos de
+   l'organisateur comptent désormais aussi contre `SESSION_PHOTO_QUOTA`,
+   comme celles de n'importe quel invité — cohérent avec l'objectif
+   "traité comme un invité de son propre événement pour tout ce qui touche
+   aux photos". Même risque de course que la dette technique déjà acceptée en
+   section 10, point 2 (pas de contrainte unique sur
+   `guest_sessions(event_id, device_id)`) : deux appels concurrents du même
+   organisateur avant la première insertion pourraient créer deux sessions au
+   lieu d'une réutilisée — pas grave si ça arrive, pas une faille de sécurité.
 
 ## 11. Prochaine étape
 

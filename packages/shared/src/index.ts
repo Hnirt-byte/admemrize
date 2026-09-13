@@ -192,6 +192,41 @@ export const AuthorizeUploadResponse = z.object({
 export type AuthorizeUploadResponse = z.infer<typeof AuthorizeUploadResponse>;
 
 // ---------------------------------------------------------------------------
+// Confirmation de photo, validation et dérivés Sharp (Phase 4)
+// ---------------------------------------------------------------------------
+
+// Formats reconnus par leurs magic bytes (jamais par le Content-Type déclaré
+// par le client ni par l'extension du nom de fichier — section 14 du master
+// prompt). Pas de HEIC : la capture PWA produit toujours du JPEG (voir
+// architecture-v1-addendum.md section 2) ; WebP reste accepté pour un futur
+// point d'entrée qui n'en passerait pas par le canvas de capture.
+export const ACCEPTED_PHOTO_FORMATS = ["jpeg", "webp"] as const;
+export type AcceptedPhotoFormat = (typeof ACCEPTED_PHOTO_FORMATS)[number];
+
+export const ConfirmPhotoInput = z.object({
+  photoId: z.uuid(),
+  // Requis uniquement pour un appel organisateur, même principe qu'
+  // AuthorizeUploadInput.eventId.
+  eventId: z.uuid().optional(),
+  // Horodatage de prise de vue côté client : l'original stocké ne conserve
+  // jamais son EXIF (section 15, vie privée), donc aucune autre source ne
+  // permet de le reconstituer après coup.
+  capturedAt: IsoDateTime,
+});
+export type ConfirmPhotoInput = z.infer<typeof ConfirmPhotoInput>;
+
+export const PhotoDTO = z.object({
+  id: z.uuid(),
+  eventId: z.uuid(),
+  status: PhotoStatus,
+  capturedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+  thumbnailKey: z.string().nullable(),
+  previewKey: z.string().nullable(),
+});
+export type PhotoDTO = z.infer<typeof PhotoDTO>;
+
+// ---------------------------------------------------------------------------
 // Erreurs
 // ---------------------------------------------------------------------------
 
