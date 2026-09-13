@@ -295,6 +295,34 @@ avec une preuve plutôt qu'une intuition.
    organisateur avant la première insertion pourraient créer deux sessions au
    lieu d'une réutilisée — pas grave si ça arrive, pas une faille de sécurité.
 
+10. **Révélation paresseuse plutôt qu'un balayage du worker** (Phase 5,
+    décision assumée) : un événement dont `revealAt` est passé bascule en
+    `REVEALED` au moment où on le consulte (`apps/api/src/services/reveal.ts`,
+    appelé depuis la liste et le détail d'événement, la jonction invité, et les
+    deux routes d'accès aux photos), pas sur un tick périodique du worker.
+    Raison : le gate doit être exact à la milliseconde où la requête arrive.
+    Un worker qui tourne toutes les 5 minutes laisserait, lui, une fenêtre où
+    `revealAt` est dépassé sans que le statut ait changé — l'invité qui a le
+    QR code sous les yeux à l'heure dite se verrait refuser la galerie. La
+    correction ne doit donc de toute façon pas dépendre du worker : avec la
+    bascule à la volée, elle ne dépend plus d'aucun processus annexe, et l'API
+    reste juste même worker arrêté. **Conséquence pour la Phase 6** : un
+    événement que personne n'a consulté après son heure reste `ACTIVE_LOCKED`
+    en base. Le balayage d'expiration doit donc chercher
+    `deleteAt <= now() AND status <> 'EXPIRED'`, et surtout pas
+    `status = 'REVEALED'` comme le prévoyait le prompt initial — sans quoi ces
+    événements-là ne seraient jamais supprimés (rappel dans
+    `apps/worker/src/index.ts`).
+
+11. **`revealAt` n'est pas ramené à l'instant présent lors d'une révélation
+    anticipée** (Phase 5) : `POST /events/:id/reveal` ne touche qu'au statut.
+    L'invariant `deleteAt = revealAt + rétention` posé à la création reste donc
+    vrai, et la durée de conservation promise à l'organisateur n'est jamais
+    raccourcie par une ouverture anticipée. Corollaire à connaître côté client
+    (Phases 7-9) : un événement peut être `REVEALED` avec un `revealAt` encore
+    dans le futur — l'affichage d'un compte à rebours doit se décider sur le
+    **statut**, jamais sur une comparaison de dates faite dans le navigateur.
+
 ## 11. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.

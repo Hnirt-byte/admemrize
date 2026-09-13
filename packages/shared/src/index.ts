@@ -227,6 +227,72 @@ export const PhotoDTO = z.object({
 export type PhotoDTO = z.infer<typeof PhotoDTO>;
 
 // ---------------------------------------------------------------------------
+// Révélation et accès aux photos (Phase 5)
+// ---------------------------------------------------------------------------
+
+// Une photo telle qu'elle est servie **après** la révélation : les mêmes
+// métadonnées que PhotoDTO, plus deux URL signées à durée courte calculées par
+// le serveur. Le bucket reste privé : ces URL sont le seul moyen d'atteindre
+// un fichier, et elles ne sont émises qu'une fois le gate de révélation
+// franchi (services/reveal.ts).
+export const PhotoAccessDTO = PhotoDTO.extend({
+  thumbnailUrl: z.string(),
+  previewUrl: z.string(),
+});
+export type PhotoAccessDTO = z.infer<typeof PhotoAccessDTO>;
+
+// Page de photos par défaut et maximum : une soirée peut dépasser le millier
+// de photos, les renvoyer toutes d'un coup ferait une réponse de plusieurs Mo
+// (deux URL signées par photo).
+export const PHOTO_PAGE_DEFAULT_LIMIT = 100;
+export const PHOTO_PAGE_MAX_LIMIT = 200;
+
+export const ListPhotosQuery = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PHOTO_PAGE_MAX_LIMIT)
+    .default(PHOTO_PAGE_DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ListPhotosQuery = z.infer<typeof ListPhotosQuery>;
+
+export const EventPhotosResponse = z.object({
+  event: GuestEventView,
+  photos: z.array(PhotoAccessDTO),
+  /** Nombre total de photos révélables sur l'événement, indépendant de la page. */
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  /** Expiration des URL signées de cette réponse — au-delà, il faut re-lister. */
+  urlsExpireAt: IsoDateTime,
+  // Heure du serveur, seule référence du gate de révélation (section 21) : le
+  // client l'utilise pour son compte à rebours au lieu de son horloge locale,
+  // qui peut être fausse ou volontairement avancée.
+  serverTime: IsoDateTime,
+});
+export type EventPhotosResponse = z.infer<typeof EventPhotosResponse>;
+
+export const PhotoDownloadResponse = z.object({
+  photoId: z.uuid(),
+  url: z.string(),
+  filename: z.string(),
+  expiresAt: IsoDateTime,
+});
+export type PhotoDownloadResponse = z.infer<typeof PhotoDownloadResponse>;
+
+// Détail renvoyé avec une erreur PHOTOS_NOT_REVEALED : de quoi afficher un
+// compte à rebours honnête côté client, sans jamais lui laisser décider de
+// l'accès.
+export const PhotosNotRevealedDetails = z.object({
+  status: EventStatus,
+  revealAt: IsoDateTime,
+  serverTime: IsoDateTime,
+});
+export type PhotosNotRevealedDetails = z.infer<typeof PhotosNotRevealedDetails>;
+
+// ---------------------------------------------------------------------------
 // Erreurs
 // ---------------------------------------------------------------------------
 

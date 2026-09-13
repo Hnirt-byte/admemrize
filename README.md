@@ -77,8 +77,8 @@ la mise en œuvre réelle — voir addendum section 6).
 - [x] **Phase 1** — squelette du repo (ce commit)
 - [x] **Phase 2** — backend : auth organisateur (Argon2id, JWT), CRUD événements, sessions invité
 - [x] **Phase 3** — stockage objet Scaleway (abstraction S3, presigned URLs)
-- [ ] **Phase 4** — upload photo, validation, Sharp (thumbnail/preview)
-- [ ] **Phase 5** — révélation : gate serveur, `revealAt`, révélation anticipée
+- [x] **Phase 4** — upload photo, validation, Sharp (thumbnail/preview)
+- [x] **Phase 5** — révélation : gate serveur, `revealAt`, révélation anticipée
 - [ ] **Phase 6** — expiration : implémentation réelle du worker, suppression idempotente
 - [ ] **Phase 7** — PWA invité : capture caméra, queue offline, upload
 - [ ] **Phase 8** — PWA organisateur : dashboard, QR, settings, déclenchement reveal
@@ -342,13 +342,76 @@ Prompt à donner à Claude Code :
 4. Rappelle `/reveal` une seconde fois sur ce même event — ne doit pas
    produire d'erreur ni de changement d'état inattendu.
 
+### Endpoints livrés en Phase 5
+
+| Endpoint | Rôle | Gate |
+|---|---|---|
+| `POST /api/v1/events/:eventId/reveal` | organisateur | **nouveau** — révélation anticipée, idempotent, irréversible |
+| `GET /api/v1/events/:eventId/photos` | organisateur ou invité | **nouveau** — refuse tant que l'événement n'est pas révélé |
+| `GET /api/v1/photos/:photoId/download` | organisateur ou invité | **nouveau** — idem ; sert l'aperçu nettoyé, jamais l'original |
+
+La bascule automatique à `revealAt` se fait **à la volée dans l'API**, pas dans
+le worker : voir `apps/api/src/services/reveal.ts` et
+`architecture-v1-addendum.md` section 10, point 10 (avec la conséquence à
+respecter en Phase 6).
+
+### Commandes curl de la Phase 5
+
+```bash
+API=http://localhost:3000/api/v1
+JSON='Content-Type: application/json'
+ID="JSON.parse(require('fs').readFileSync(0,'utf8')).id"
+
+# 0. Jeton organisateur (ou POST /auth/login si le compte existe déjà)
+TOKEN=$(curl -s -X POST $API/auth/register -H "$JSON" \
+  -d '{"email":"orga@admemrize.test","password":"MotDePasseTresSolide!42"}' \
+  | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).tokens.accessToken")
+
+DANS_1H=$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+
+# 1. revealAt dans le futur → photos inaccessibles, y compris pour l'organisateur
+FUTUR=$(curl -s -X POST $API/events -H "Authorization: Bearer $TOKEN" -H "$JSON" \
+  -d "{\"name\":\"Capsule verrouillee\",\"type\":\"FETE\",\"eventDate\":\"$DANS_1H\",\"revealAt\":\"$DANS_1H\",\"retentionHours\":24}" \
+  | node -pe "$ID")
+
+curl -i $API/events/$FUTUR/photos -H "Authorization: Bearer $TOKEN"
+# → 403 PHOTOS_NOT_REVEALED
+
+# 2. revealAt dans le passé → bascule automatique, sans appeler /reveal.
+#    L'API refuse volontairement un revealAt passé à la création (règle
+#    produit) : on antidate la ligne en base pour ne pas attendre l'échéance.
+PASSE=$(curl -s -X POST $API/events -H "Authorization: Bearer $TOKEN" -H "$JSON" \
+  -d "{\"name\":\"Capsule echue\",\"type\":\"FETE\",\"eventDate\":\"$DANS_1H\",\"revealAt\":\"$DANS_1H\",\"retentionHours\":24}" \
+  | node -pe "$ID")
+
+docker compose exec -T postgres psql -U admemrize -d admemrize \
+  -c "UPDATE events SET reveal_at = now() - interval '1 minute' WHERE id = '$PASSE';"
+
+curl -i $API/events/$PASSE/photos -H "Authorization: Bearer $TOKEN"
+# → 200, et status passé à REVEALED tout seul
+
+# 3. Révélation anticipée sur l'événement encore verrouillé, puis rappel
+curl -s -X POST $API/events/$FUTUR/reveal -H "Authorization: Bearer $TOKEN"
+curl -s -X POST $API/events/$FUTUR/reveal -H "Authorization: Bearer $TOKEN"
+# → deux fois 200 et status REVEALED (idempotent)
+
+# 4. Tentative de reverrouillage
+curl -i -X PATCH $API/events/$FUTUR -H "Authorization: Bearer $TOKEN" -H "$JSON" \
+  -d '{"revealAt":"2030-01-01T00:00:00Z"}'
+# → 409 EVENT_ALREADY_REVEALED
+```
+
 ## Phase 6 : expiration
 
 Prompt à donner à Claude Code :
 
 > Implémente la Phase 6 : le vrai contenu du worker
 > (`apps/worker/src/index.ts`, actuellement un squelette). Il doit chercher
-> les events avec `deleteAt <= now()` ET `status = REVEALED`, puis supprimer
+> les events avec `deleteAt <= now()` ET `status <> EXPIRED` (**corrigé
+> depuis la Phase 5** : la révélation est paresseuse, un événement que
+> personne n'a consulté après son `revealAt` est encore `ACTIVE_LOCKED` en
+> base — filtrer sur `status = REVEALED` le rendrait immortel, voir
+> `architecture-v1-addendum.md` section 10 point 10), puis supprimer
 > dans l'ordre : objets S3 (originaux, previews, thumbnails), exports/ZIP
 > temporaires, métadonnées photo en base, sessions invité, et enfin passer
 > l'event à `EXPIRED` (section 22 du master prompt). La suppression doit

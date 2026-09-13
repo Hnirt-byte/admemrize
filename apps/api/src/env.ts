@@ -51,6 +51,18 @@ export const EnvSchema = z
     // l'envoi direct qui suit immédiatement /uploads/authorize (section 12).
     UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
+    // Durée de vie des URL signées de lecture (vignette, aperçu,
+    // téléchargement) émises après la révélation (Phase 5). Plus longue que
+    // celle d'upload : on parcourt une galerie pendant un moment, et une URL
+    // expirée en plein défilement obligerait à re-lister. Reste courte à
+    // l'échelle de la vie de l'événement — une URL qui fuite ne survit pas à
+    // la soirée.
+    DOWNLOAD_URL_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(900),
+
     // Quotas anti-abus, configurables sans déploiement de code (section 12).
     SESSION_PHOTO_QUOTA: z.coerce.number().int().positive().default(500),
     EVENT_PHOTO_QUOTA: z.coerce.number().int().positive().default(10_000),

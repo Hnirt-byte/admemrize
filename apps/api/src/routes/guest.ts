@@ -10,6 +10,7 @@ import { events, guestSessions } from "../db/schema.js";
 import { gone, notFound } from "../lib/errors.js";
 import { hashToken, signGuestSessionToken } from "../lib/tokens.js";
 import { requireGuest, type AuthDeps } from "../plugins/auth.js";
+import { resolveEventReveal } from "../services/reveal.js";
 import type { AppInstance } from "../types.js";
 
 const EventParams = z.object({ eventId: z.uuid() });
@@ -38,15 +39,21 @@ export function registerGuestRoutes(app: AppInstance, deps: AuthDeps): void {
       const { eventId } = request.params;
       const { nickname, deviceId } = request.body;
 
-      const [event] = await deps.db
+      const [row] = await deps.db
         .select()
         .from(events)
         .where(eq(events.id, eventId))
         .limit(1);
 
-      if (!event) {
+      if (!row) {
         throw notFound("Événement introuvable.", "EVENT_NOT_FOUND");
       }
+
+      // Un invité qui scanne le QR code après l'heure de révélation doit voir
+      // un événement REVEALED, sans attendre que l'organisateur ouvre son
+      // tableau de bord : la bascule automatique se fait ici aussi
+      // (services/reveal.ts).
+      const event = await resolveEventReveal(deps.db, row);
 
       if (event.status === "EXPIRED" || event.deleteAt.getTime() <= Date.now()) {
         throw gone(

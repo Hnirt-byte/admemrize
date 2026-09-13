@@ -9,6 +9,12 @@ import type { Database } from "../db/client.js";
 import { events, favorites, guestSessions, photos } from "../db/schema.js";
 import { badRequest, notFound } from "../lib/errors.js";
 import { requireOrganizer, type AuthDeps } from "../plugins/auth.js";
+import {
+  assertStillLocked,
+  resolveDueRevealsForOwner,
+  resolveEventReveal,
+  revealEventNow,
+} from "../services/reveal.js";
 import type { AppInstance } from "../types.js";
 
 const EventParams = z.object({ eventId: z.uuid() });
@@ -105,6 +111,12 @@ export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
       schema: { response: { 200: z.object({ events: z.array(EventDTO) }) } },
     },
     async (request) => {
+      // Révélation automatique de tous les événements échus de cet
+      // organisateur avant de les lire : son tableau de bord ne peut pas
+      // afficher ACTIVE_LOCKED sur un événement dont l'heure est passée
+      // (services/reveal.ts).
+      await resolveDueRevealsForOwner(deps.db, request.organizer!.userId);
+
       const rows = await deps.db
         .select()
         .from(events)
@@ -127,7 +139,7 @@ export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
         request.organizer!.userId,
         request.params.eventId
       );
-      return toEventDTO(event);
+      return toEventDTO(await resolveEventReveal(deps.db, event));
     }
   );
 
@@ -142,11 +154,20 @@ export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
       },
     },
     async (request) => {
-      const existing = await getOwnedEvent(
+      const existing = await resolveEventReveal(
         deps.db,
-        request.organizer!.userId,
-        request.params.eventId
+        await getOwnedEvent(
+          deps.db,
+          request.organizer!.userId,
+          request.params.eventId
+        )
       );
+
+      // Un événement révélé est figé : sans ce garde, repousser `revealAt`
+      // dans le futur reverrouillerait l'événement par la bande, alors que
+      // REVEALED -> ACTIVE_LOCKED n'existe pas (section 6).
+      assertStillLocked(existing);
+
       const body = request.body;
 
       const revealAt = body.revealAt ? new Date(body.revealAt) : existing.revealAt;
@@ -176,6 +197,32 @@ export function registerEventRoutes(app: AppInstance, deps: AuthDeps): void {
         .returning();
 
       return toEventDTO(updated!);
+    }
+  );
+
+  /**
+   * Révélation anticipée — nouvel endpoint de la Phase 5. L'organisateur
+   * ouvre la capsule avant l'heure prévue, depuis les trois écrans
+   * d'avertissement de la PWA (section 3, Phase 8).
+   *
+   * Idempotent : rappelé sur un événement déjà révélé, il renvoie 200 et le
+   * même état, sans seconde écriture. Irréversible : aucune route, ici ou
+   * ailleurs, ne ramène un événement de REVEALED à ACTIVE_LOCKED (section 6).
+   */
+  app.post(
+    "/api/v1/events/:eventId/reveal",
+    {
+      preHandler: organizerOnly,
+      schema: { params: EventParams, response: { 200: EventDTO } },
+    },
+    async (request) => {
+      const event = await getOwnedEvent(
+        deps.db,
+        request.organizer!.userId,
+        request.params.eventId
+      );
+
+      return toEventDTO(await revealEventNow(deps.db, event));
     }
   );
 
