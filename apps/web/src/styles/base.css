@@ -1,0 +1,56 @@
+/*
+ * Socle commun : remise à zéro minimale et jetons de couleur de la direction
+ * "Organic Premium" (section 26 du master prompt). Le design system complet
+ * arrive en Phase 10 — ce fichier ne prétend qu'à donner des écrans lisibles et
+ * cohérents d'ici là, pas à figer l'identité.
+ */
+
+:root {
+  --ivoire: #faf7f0;
+  --sable: #e8dcc8;
+  --sable-fonce: #d8c8ae;
+  --encre: #2a2622;
+  --encre-douce: #6b6257;
+  --or: #b8935f;
+  --nuit: #14110e;
+  --alerte: #a4522f;
+
+  --rayon: 16px;
+  --marge-ecran: clamp(1.25rem, 6vw, 2.5rem);
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ivoire);
+  color: var(--encre);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Un invité qui prend des photos ne doit jamais sélectionner du texte par
+   inadvertance en visant son cadrage. */
+button,
+.guest-flow {
+  -webkit-tap-highlight-color: transparent;
+}

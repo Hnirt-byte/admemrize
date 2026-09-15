@@ -10,6 +10,7 @@ import { events, guestSessions } from "../db/schema.js";
 import { gone, notFound } from "../lib/errors.js";
 import { hashToken, signGuestSessionToken } from "../lib/tokens.js";
 import { requireGuest, type AuthDeps } from "../plugins/auth.js";
+import { guestJoinRateLimit } from "../plugins/rate-limit.js";
 import { resolveEventReveal } from "../services/reveal.js";
 import type { AppInstance } from "../types.js";
 
@@ -25,10 +26,14 @@ export function registerGuestRoutes(app: AppInstance, deps: AuthDeps): void {
   app.post(
     "/api/v1/events/:eventId/guest/join",
     {
-      // Quota par IP volontairement haut : les invités d'un même événement
-      // partagent le Wi-Fi de la salle, donc une seule IP publique. Il arrête un
-      // script qui martèle la route, pas une noce de cent personnes.
-      config: { rateLimit: { max: 120, timeWindow: "10 minutes" } },
+      // Seule route invité encore comptée par IP, et c'est inévitable : elle
+      // *crée* la session, il n'existe donc rien d'autre à compter au moment
+      // où elle est appelée (le `deviceId` du corps est choisi par le client,
+      // il suffirait de le faire varier). Son plafond est dimensionné pour une
+      // salle entière qui scanne le QR code en même temps — voir
+      // GUEST_JOIN_RATE_LIMIT_MAX (env.ts) et plugins/rate-limit.ts. Il arrête
+      // un script qui martèle la route, pas une noce de cent personnes.
+      config: { rateLimit: guestJoinRateLimit(deps.env) },
       schema: {
         params: EventParams,
         body: GuestJoinInput,

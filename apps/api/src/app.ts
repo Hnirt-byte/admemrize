@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { Database } from "./db/client.js";
 import type { Env } from "./env.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
+import { rateLimitErrorResponse } from "./plugins/rate-limit.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerGuestRoutes } from "./routes/guest.js";
@@ -51,8 +52,11 @@ export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
   });
 
   if (options.enableRateLimit ?? true) {
-    // Quota global de sécurité ; chaque route sensible resserre le sien via
-    // `config.rateLimit` (inscription, connexion, jonction invité).
+    // Quota global de sécurité, compté par IP ; chaque route sensible définit
+    // le sien via `config.rateLimit` (inscription, connexion, jonction invité),
+    // et les routes photo remplacent en plus la clé de comptage par la session
+    // appelante (plugins/rate-limit.ts).
+    //
     // Volontairement large : lors d'un mariage, tous les invités passent par le
     // même Wi-Fi, donc par une seule IP publique. Un quota serré punirait une
     // salle entière pour le comportement d'un seul appareil.
@@ -60,6 +64,9 @@ export async function buildApp(options: BuildAppOptions): Promise<AppInstance> {
       global: true,
       max: 600,
       timeWindow: "1 minute",
+      // Un refus de quota sort sous la même enveloppe que toutes les autres
+      // erreurs de l'API, sur toutes les routes d'un coup.
+      errorResponseBuilder: rateLimitErrorResponse,
     });
   }
 

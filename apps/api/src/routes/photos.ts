@@ -21,6 +21,7 @@ import {
   type GuestContext,
   type OrganizerContext,
 } from "../plugins/auth.js";
+import { sessionRateLimit } from "../plugins/rate-limit.js";
 import { requireRevealedEvent, serverNow } from "../services/reveal.js";
 import {
   originalKey,
@@ -148,7 +149,10 @@ export function registerPhotoRoutes(app: AppInstance, deps: PhotoDeps): void {
   app.post(
     "/api/v1/photos/confirm",
     {
-      config: { rateLimit: { max: 120, timeWindow: "10 minutes" } },
+      // Même quota par session que /uploads/authorize, dont cette route est
+      // l'autre moitié : une photo coûte un appel à chacune des deux
+      // (plugins/rate-limit.ts).
+      config: { rateLimit: sessionRateLimit(deps.env) },
       preHandler: requireOrganizerOrGuest(deps),
       schema: {
         body: ConfirmPhotoInput,
@@ -360,6 +364,9 @@ export function registerPhotoRoutes(app: AppInstance, deps: PhotoDeps): void {
   app.get(
     "/api/v1/events/:eventId/photos",
     {
+      // Compté par session, comme les routes d'envoi : une galerie se parcourt
+      // à cent en même temps derrière la même IP, le soir de la révélation.
+      config: { rateLimit: sessionRateLimit(deps.env) },
       preHandler: requireOrganizerOrGuest(deps),
       schema: {
         params: EventParams,
@@ -466,6 +473,7 @@ export function registerPhotoRoutes(app: AppInstance, deps: PhotoDeps): void {
   app.get(
     "/api/v1/photos/:photoId/download",
     {
+      config: { rateLimit: sessionRateLimit(deps.env) },
       preHandler: requireOrganizerOrGuest(deps),
       schema: {
         params: PhotoParams,

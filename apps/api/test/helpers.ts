@@ -70,6 +70,15 @@ export interface CreateTestContextOptions {
    * passer `createFakeObjectStorage()` ici à la place.
    */
   storage?: ObjectStorage;
+  /**
+   * Désactivé par défaut : la quasi-totalité des tests enchaîne bien plus
+   * d'appels qu'un vrai client, et se heurterait aux quotas anti-force brute.
+   * Les tests de rate limit eux-mêmes l'activent, avec des plafonds abaissés
+   * via `env` pour ne pas avoir à émettre des centaines de requêtes.
+   */
+  enableRateLimit?: boolean;
+  /** Surcharge ponctuelle de l'environnement (quotas, plafonds de rate limit). */
+  env?: Partial<Env>;
 }
 
 /**
@@ -100,9 +109,9 @@ export async function createTestContext(
 
   const app = await buildApp({
     db,
-    env: testEnv,
+    env: { ...testEnv, ...options.env },
     storage: options.storage ?? createTestStorage(),
-    enableRateLimit: false,
+    enableRateLimit: options.enableRateLimit ?? false,
     logger: false,
   });
   await app.ready();

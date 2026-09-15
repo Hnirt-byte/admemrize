@@ -10,6 +10,7 @@ import { events, photos } from "../db/schema.js";
 import { badRequest, conflict, notFound } from "../lib/errors.js";
 import { resolveOrganizerGuestSessionId } from "../lib/organizer-guest-session.js";
 import { requireOrganizerOrGuest, type AuthDeps } from "../plugins/auth.js";
+import { sessionRateLimit } from "../plugins/rate-limit.js";
 import { originalKey } from "../storage/keys.js";
 import type { ObjectStorage } from "../storage/types.js";
 import type { AppInstance } from "../types.js";
@@ -30,10 +31,14 @@ export function registerUploadRoutes(app: AppInstance, deps: UploadDeps): void {
   app.post(
     "/api/v1/uploads/authorize",
     {
-      // Un invité déclenche cette route à chaque photo prise pendant tout
-      // l'événement : quota généreux, resserré par les contrôles métier
-      // ci-dessous (event non expiré, quotas de photos).
-      config: { rateLimit: { max: 120, timeWindow: "10 minutes" } },
+      // Quota compté **par session invité** (ou par organisateur), pas par IP :
+      // les invités d'un mariage partagent une seule IP publique, et un quota
+      // par IP les ferait se bloquer les uns les autres — voir
+      // plugins/rate-limit.ts. Reste généreux à l'échelle d'un appareil : il
+      // absorbe la reprise d'une file offline entière, et les contrôles métier
+      // ci-dessous (événement non expiré, quotas de photos) font le vrai
+      // travail de limitation.
+      config: { rateLimit: sessionRateLimit(deps.env) },
       preHandler: requireOrganizerOrGuest(deps),
       schema: {
         body: AuthorizeUploadInput,

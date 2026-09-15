@@ -1,0 +1,514 @@
+/*
+ * Flux invité (Phase 7). Mobile d'abord : l'invité est debout, une main
+ * occupée, dans une salle mal éclairée. Tout ce qui compte est atteignable au
+ * pouce, et les zones tactiles ne descendent jamais sous 44 px.
+ */
+
+.guest-flow {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Écrans "papier" (bienvenue, prénom, permission, attente) --- */
+
+.guest-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--marge-ecran))
+    var(--marge-ecran)
+    calc(env(safe-area-inset-bottom, 0px) + var(--marge-ecran));
+  max-width: 34rem;
+  margin: 0 auto;
+  width: 100%;
+  text-align: center;
+}
+
+.guest-screen--top {
+  justify-content: flex-start;
+}
+
+.guest-eyebrow {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--encre-douce);
+}
+
+.guest-title {
+  margin: 0;
+  font-size: clamp(1.75rem, 7vw, 2.4rem);
+  line-height: 1.15;
+  font-weight: 600;
+}
+
+.guest-lede {
+  margin: 0;
+  color: var(--encre-douce);
+}
+
+.guest-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.guest-points li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid var(--sable);
+  border-radius: var(--rayon);
+  padding: 0.875rem 1rem;
+}
+
+.guest-points span[aria-hidden] {
+  font-size: 1.1rem;
+  line-height: 1.4;
+}
+
+.guest-actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* --- Boutons --- */
+
+.btn {
+  min-height: 52px;
+  padding: 0.85rem 1.5rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, background-color 120ms ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.btn--primary {
+  background: var(--encre);
+  color: var(--ivoire);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: var(--sable-fonce);
+  color: var(--encre);
+}
+
+.btn--link {
+  background: none;
+  border: none;
+  min-height: 44px;
+  color: var(--encre-douce);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* --- Formulaire prénom --- */
+
+.field {
+  display: grid;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.field label {
+  font-weight: 600;
+}
+
+.field input {
+  font: inherit;
+  padding: 0.9rem 1rem;
+  min-height: 52px;
+  border-radius: var(--rayon);
+  border: 1px solid var(--sable-fonce);
+  background: #fff;
+  color: var(--encre);
+}
+
+.field input:focus-visible {
+  outline: 2px solid var(--or);
+  outline-offset: 1px;
+}
+
+.field__hint {
+  font-size: 0.85rem;
+  color: var(--encre-douce);
+}
+
+.form-error {
+  margin: 0;
+  color: var(--alerte);
+  font-size: 0.95rem;
+}
+
+/* --- Bloc d'état (caméra refusée, événement indisponible) --- */
+
+.notice {
+  border: 1px solid var(--sable-fonce);
+  background: #fff;
+  border-radius: var(--rayon);
+  padding: 1.25rem;
+  display: grid;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.notice__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.notice__body {
+  margin: 0;
+  color: var(--encre-douce);
+}
+
+/* --- Écran caméra --- */
+
+.camera {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--nuit);
+  color: #fff;
+  overflow: hidden;
+}
+
+.camera__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Seul l'aperçu est inversé : la photo enregistrée, elle, garde l'orientation
+   réelle du capteur. */
+.camera__video--mirrored {
+  transform: scaleX(-1);
+}
+
+.camera__top,
+.camera__bottom {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem var(--marge-ecran);
+}
+
+.camera__top {
+  justify-content: space-between;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
+  background: linear-gradient(to bottom, rgb(0 0 0 / 55%), transparent);
+}
+
+.camera__bottom {
+  margin-top: auto;
+  justify-content: space-between;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem);
+  background: linear-gradient(to top, rgb(0 0 0 / 60%), transparent);
+}
+
+.camera__event {
+  display: grid;
+  text-align: left;
+  min-width: 0;
+}
+
+.camera__event strong {
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.camera__event span {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.camera__chip {
+  border: 1px solid rgb(255 255 255 / 35%);
+  background: rgb(0 0 0 / 35%);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  min-height: 44px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.camera__status {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  padding: var(--marge-ecran);
+  text-align: center;
+  color: #fff;
+  background: var(--nuit);
+}
+
+.shutter {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 4px solid rgb(255 255 255 / 85%);
+  background: rgb(255 255 255 / 15%);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+
+.shutter::after {
+  content: "";
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 120ms ease;
+}
+
+.shutter:active:not(:disabled)::after {
+  transform: scale(0.88);
+}
+
+.shutter:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Colonnes latérales de largeur égale pour que l'obturateur reste
+   parfaitement centré quel que soit le texte autour. */
+.camera__side {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.camera__side--right {
+  justify-content: flex-end;
+}
+
+/* --- Animation "Souvenir scellé" --- */
+
+.seal {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 1rem;
+  background: rgb(20 17 14 / 92%);
+  color: var(--ivoire);
+  animation: seal-fade 220ms ease-out;
+}
+
+.seal__mark {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--or), #8d6b3d);
+  display: grid;
+  place-items: center;
+  font-size: 2.25rem;
+  box-shadow: 0 0 0 0 rgb(184 147 95 / 45%);
+  animation: seal-stamp 520ms cubic-bezier(0.2, 0.9, 0.25, 1),
+    seal-halo 1.1s ease-out 320ms;
+}
+
+.seal__label {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  animation: seal-rise 420ms ease-out 140ms both;
+}
+
+.seal__hint {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.75;
+  animation: seal-rise 420ms ease-out 240ms both;
+}
+
+@keyframes seal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes seal-stamp {
+  0% {
+    transform: scale(1.7) rotate(-12deg);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(0.92) rotate(2deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes seal-halo {
+  from {
+    box-shadow: 0 0 0 0 rgb(184 147 95 / 45%);
+  }
+  to {
+    box-shadow: 0 0 0 42px rgb(184 147 95 / 0%);
+  }
+}
+
+@keyframes seal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- Compteurs et état de la queue --- */
+
+.counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.75rem;
+}
+
+.counter {
+  background: #fff;
+  border: 1px solid var(--sable);
+  border-radius: var(--rayon);
+  padding: 1rem 0.75rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.counter__value {
+  font-size: 1.9rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.counter__label {
+  font-size: 0.82rem;
+  color: var(--encre-douce);
+}
+
+.queue-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--encre-douce);
+  min-height: 1.5rem;
+}
+
+.queue-state__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--or);
+  flex: none;
+}
+
+.queue-state__dot--offline {
+  background: var(--alerte);
+}
+
+.queue-state__dot--synced {
+  background: #4e7a4a;
+}
+
+/* --- Compte à rebours --- */
+
+.countdown {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.countdown__unit {
+  background: var(--sable);
+  border-radius: var(--rayon);
+  padding: 0.75rem 0.5rem;
+  min-width: 4rem;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.countdown__number {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown__unit-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--encre-douce);
+}
+
+/* --- Accessibilité --- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seal,
+  .seal__mark,
+  .seal__label,
+  .seal__hint {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+
+  .btn,
+  .shutter::after {
+    transition: none;
+  }
+}

@@ -80,6 +80,23 @@ export const EnvSchema = z
     // Quotas anti-abus, configurables sans déploiement de code (section 12).
     SESSION_PHOTO_QUOTA: z.coerce.number().int().positive().default(500),
     EVENT_PHOTO_QUOTA: z.coerce.number().int().positive().default(10_000),
+
+    // Plafond d'appels des routes photo authentifiées (autorisation d'upload,
+    // confirmation, accès à la galerie), **par session invité ou par
+    // organisateur** — jamais par IP, sous peine qu'une salle entière derrière
+    // le même Wi-Fi partage un seul quota (plugins/rate-limit.ts). Fenêtre de
+    // 10 minutes. 300 laisse largement passer la reprise d'une file offline
+    // d'une centaine de photos (deux appels chacune), tout en restant borné —
+    // SESSION_PHOTO_QUOTA limite de toute façon le total sur l'événement.
+    SESSION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+
+    // Plafond de /guest/join, la seule de ces routes qui reste comptée par IP :
+    // aucune session n'existe encore au moment de l'appel, et le `deviceId`
+    // fourni dans le corps est choisi par le client, donc inutilisable comme
+    // clé de quota. Fenêtre de 5 minutes. 600 absorbe une salle de plusieurs
+    // centaines d'invités qui scannent le QR code en même temps, plus leurs
+    // rafraîchissements de jeton.
+    GUEST_JOIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
   })
   .superRefine((env, ctx) => {
     const secrets = [

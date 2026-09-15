@@ -361,6 +361,46 @@ avec une preuve plutôt qu'une intuition.
     jamais supprimés. Elle appelle désormais `purgeEventObjects()`, le même code
     que l'expiration automatique, dans le même ordre (fichiers avant base).
 
+15. **Les quotas de rate limit étaient comptés par IP, alors qu'une salle
+    entière partage une seule IP publique** (constaté en Phase 7, **corrigé
+    dans la foulée**) : `/uploads/authorize` et `/photos/confirm` plafonnaient
+    à 120 appels par tranche de 10 minutes et par IP. Ce quota avait été choisi
+    en Phase 2 en pensant justement au Wi-Fi partagé, mais calibré avant qu'un
+    client ne consomme réellement ces routes : une noce de 100 invités derrière
+    le même NAT le dépasse avant la fin du vin d'honneur, chaque photo coûtant
+    un `authorize` + un `confirm`. Le problème n'était pas un plafond trop bas,
+    c'était la mauvaise unité de compte.
+    **Correction** : `apps/api/src/plugins/rate-limit.ts` fournit un
+    `keyGenerator` qui vérifie la signature du jeton présenté et compte par
+    `guestSessionId` (invité) ou par `userId` (organisateur), avec repli sur
+    l'IP pour les requêtes sans jeton valable — lesquelles finissent en 401
+    mais doivent rester comptées. La clé vient donc toujours d'une signature
+    vérifiée, jamais d'un en-tête que le client pourrait simplement affirmer.
+    Appliqué aux quatre routes photo authentifiées (autorisation, confirmation,
+    liste après révélation, téléchargement), plafond
+    `SESSION_RATE_LIMIT_MAX` = 300 par 10 minutes. `/guest/join` reste compté
+    par IP — c'est l'appel qui *crée* la session, il n'y a rien d'autre à
+    compter, et le `deviceId` du corps est choisi par le client donc
+    inutilisable comme clé — mais son plafond passe à
+    `GUEST_JOIN_RATE_LIMIT_MAX` = 600 par 5 minutes. Couvert par
+    `apps/api/test/rate-limit.test.ts` : plusieurs sessions derrière une même
+    IP ne se pénalisent pas, l'organisateur a son propre compteur, et le repli
+    sur l'IP tient face à un jeton forgé. Effet de bord bienvenu : les refus de
+    quota sortent désormais sous l'enveloppe d'erreur commune, avec le code
+    `RATE_LIMITED` et un `details.retryAfterSeconds` — c'est ce que la queue
+    offline de la Phase 7 attend pour distinguer un refus temporaire d'un refus
+    définitif.
+
+16. **Pas de Background Sync, et pas de Service Worker impliqué dans les envois**
+    (Phase 7, décision assumée) : la queue offline vit dans IndexedDB et n'est
+    vidée que par la page elle-même, sur `visibilitychange`, `online`,
+    `pageshow` et un filet toutes les 60 secondes. Safari/WebKit n'implémentant
+    pas la Background Sync API (section 2), une implémentation à base de
+    Service Worker n'aurait de toute façon couvert que Chrome/Android, au prix
+    d'un second chemin de code à maintenir pour la moitié des invités. Limite
+    concrète à connaître : onglet fermé, rien ne repart — il faut rouvrir le
+    lien. Les photos, elles, restent en local aussi longtemps qu'il le faut.
+
 ## 11. Prochaine étape
 
 Phase 1 : scaffolding du repo ci-dessus (monorepo, configs de base, docker-compose, schéma Drizzle initial). Prêt à démarrer sur confirmation.

@@ -42,3 +42,11 @@ export const conflict = (message: string, code = "CONFLICT") =>
 
 export const gone = (message: string, code = "GONE") =>
   new AppError(410, code, message);
+
+/**
+ * Quota d'appels dépassé. `details.retryAfterSeconds` double l'en-tête
+ * `Retry-After` posé par @fastify/rate-limit : un client qui met une photo en
+ * file d'attente (Phase 7) sait ainsi quand la reprendre sans deviner.
+ */
+export const tooManyRequests = (message: string, retryAfterSeconds: number) =>
+  new AppError(429, "RATE_LIMITED", message, { retryAfterSeconds });

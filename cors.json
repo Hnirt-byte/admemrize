@@ -1,0 +1,11 @@
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://admemrize.cloud", "http://localhost:5173"],
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["GET", "PUT", "HEAD"],
+      "MaxAgeSeconds": 3000,
+      "ExposeHeaders": ["ETag"]
+    }
+  ]
+}

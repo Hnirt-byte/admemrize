@@ -506,21 +506,156 @@ EXPIRED, il ne fait plus partie des candidats, et le passage ne fait rien.
 
 Prompt à donner à Claude Code :
 
-> Implémente la Phase 7 : le flux invité complet dans
-> `apps/web/src/routes/guest/` (sections 7 à 9 du master prompt). Écran de
-> bienvenue (déjà un placeholder) → saisie du prénom → demande de
-> permission caméra → écran caméra avec capture (`getUserMedia` + rendu sur
-> `<canvas>` + `canvas.toBlob('image/jpeg')` — jamais de fichier HEIC, voir
-> `architecture-v1-addendum.md`) → après capture, animation courte "Souvenir
-> scellé" SANS jamais afficher la photo → écran d'attente avec compteur de
-> photos scellées et compte à rebours avant `revealAt`. Queue offline via
-> `IndexedDB` (utilise `idb-keyval`) qui stocke les photos en attente
-> d'upload (Phases 3-4), avec retry automatique à chaque retour au premier
-> plan de la page — Safari ne supporte pas la Background Sync API, c'est une
-> limite connue et acceptée (voir addendum). Ne supprime jamais la copie
-> locale avant confirmation serveur. Termine en m'expliquant comment simuler
-> une coupure réseau dans Chrome DevTools pour que je teste moi-même la
-> reprise de la queue offline.
+Implémente la Phase 7 : le flux invité complet dans apps/web/src/routes/guest/ (sections 7 à 9 du master prompt). Écran de bienvenue (déjà un placeholder) → saisie du prénom → demande de permission caméra → écran caméra avec capture (getUserMedia, caméra arrière par défaut via facingMode: 'environment', + rendu sur <canvas> + canvas.toBlob('image/jpeg') — jamais de fichier HEIC, voir architecture-v1-addendum.md) → après capture, animation courte "Souvenir scellé" SANS jamais afficher la photo → écran d'attente avec compteur de photos scellées et compte à rebours avant revealAt. Le paramètre de route s'appelle eventSlug dans le squelette actuel mais correspond en réalité à l'id (UUID) de l'événement — pas de champ slug dans le schéma ; renomme le paramètre en eventId pour éviter toute confusion. Persiste le deviceId du navigateur (localStorage) : au retour sur la page pour un événement déjà rejoint, retrouve la session existante via /guest/join (idempotent par deviceId, Phase 2) et saute directement à l'écran caméra, sans redemander le prénom. Si la permission caméra est refusée, affiche un état minimal et clair plutôt qu'un écran vide (la gestion complète des erreurs viendra en Phase 10, mais ce cas précis ne doit jamais laisser l'invité bloqué sans explication). Queue offline via IndexedDB (utilise idb-keyval) qui stocke les photos en attente d'upload (Phases 3-4), avec retry automatique à chaque retour au premier plan de la page — Safari ne supporte pas la Background Sync API, c'est une limite connue et acceptée (voir addendum). Ne supprime jamais la copie locale avant confirmation serveur. Termine en m'expliquant comment simuler une coupure réseau dans Chrome DevTools pour que je teste moi-même la reprise de la queue offline.
+**Prérequis manuel, avant de tester** (comme pour la Phase 3, Claude Code ne
+peut pas le faire à ta place) : autoriser le navigateur à envoyer un fichier
+directement vers le bucket. Jusqu'ici les envois venaient de `curl`, qui se
+moque du CORS ; à partir de la Phase 7 c'est la PWA qui fait le `PUT`, et
+Scaleway le refuse tant que le bucket n'a pas de règle CORS. Dans la console
+Scaleway (bucket `admemrize-events` → onglet Paramètres → CORS), ou en ligne de
+commande :
+
+```bash
+cat > /tmp/cors.json <<'JSON'
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["http://localhost:5173", "https://admemrize.ton-domaine.fr"],
+      "AllowedMethods": ["PUT", "GET"],
+      "AllowedHeaders": ["content-type"],
+      "MaxAgeSeconds": 3000
+    }
+  ]
+}
+JSON
+
+aws s3api put-bucket-cors \
+  --endpoint-url https://s3.fr-par.scw.cloud \
+  --bucket admemrize-events \
+  --cors-configuration file:///tmp/cors.json
+```
+
+Sans cette règle, la capture fonctionne (la photo est bien scellée en local)
+mais rien ne part : la file reste bloquée sur « en attente », et la console du
+navigateur affiche une erreur CORS sur `s3.fr-par.scw.cloud`.
+
+### Ce qui a été livré en Phase 7
+
+Tout vit dans `apps/web/src/` :
+
+| Fichier | Rôle |
+|---|---|
+| `routes/guest/GuestFlow.tsx` | Orchestrateur des 5 écrans, monté sur `/e/:eventId` |
+| `routes/guest/GuestWelcome.tsx` | Écran de bienvenue (le placeholder de la Phase 1 est remplacé) |
+| `routes/guest/NicknameForm.tsx` | Saisie du prénom, seule donnée personnelle demandée |
+| `routes/guest/CameraPermission.tsx` | Demande d'accès caméra **et** état affiché en cas de refus |
+| `routes/guest/CameraScreen.tsx` | Cadrage, déclencheur, bascule avant/arrière, compteurs |
+| `routes/guest/SealedFlash.tsx` | Animation « Souvenir scellé » — ne montre jamais la photo |
+| `routes/guest/WaitingScreen.tsx` | Compteur de souvenirs scellés + compte à rebours |
+| `lib/api.ts` | Client des endpoints des Phases 2 à 4, enveloppe d'erreur partagée |
+| `lib/camera.ts` | `getUserMedia`, capture `<canvas>` → `toBlob("image/jpeg")` |
+| `lib/offline-queue.ts` | Queue IndexedDB (`idb-keyval`) des photos en attente |
+| `lib/upload-sync.ts` | Moteur d'envoi : autorisation → PUT Scaleway → confirmation |
+| `lib/guest-session.ts` | Session invité persistée, `deviceId`, renouvellement du jeton |
+
+Points à connaître :
+
+- **La route s'appelle désormais `/e/:eventId`** (elle s'appelait `:eventSlug`
+  dans le squelette de la Phase 1) : le paramètre est bien l'`id` UUID de
+  l'événement, il n'y a pas de champ `slug` dans le schéma. C'est cette forme
+  d'URL que devra encoder le QR code de la Phase 8.
+- **La photo n'est jamais affichée.** Le `<canvas>` de capture n'est pas
+  attaché au document, et rien dans l'interface ne rend le blob : ni vignette,
+  ni aperçu flouté.
+- **Aucune copie locale n'est supprimée avant que le serveur ait tranché.** Une
+  photo quitte IndexedDB dans deux cas seulement : `/photos/confirm` a répondu
+  `READY` (elle est scellée), ou il a répondu `FAILED` — le fichier a été
+  examiné et rejeté, aucune reprise n'y changera rien et garder ces octets
+  n'aiderait personne. Ce second cas est silencieux : l'invité n'a jamais vu
+  cette photo et ne peut pas la refaire, lui signaler une perte qu'il ne peut
+  ni constater ni réparer trahirait la promesse de la capsule (la trace reste
+  dans la console du navigateur). En revanche, un refus qui ne met pas en cause
+  le fichier — quota atteint, événement expiré — arrête les tentatives mais
+  **conserve** le blob : la photo est bonne, la jeter serait perdre un souvenir
+  valable.
+- **La reprise est en deux temps.** Si l'envoi vers Scaleway a réussi mais que
+  la confirmation a échoué, la reprise ne renvoie pas le fichier : elle rejoue
+  seulement la confirmation, qui est idempotente (Phase 4).
+- **Retour d'un invité déjà inscrit** : le `deviceId` en `localStorage` fait de
+  `/guest/join` un simple rafraîchissement de jeton, et l'invité retombe
+  directement sur l'écran caméra — sans repasser par le prénom, et sans
+  attendre le réseau (la session connue est relue localement d'abord).
+- **Pas de Background Sync** (Safari ne l'implémente pas, addendum section 2) :
+  la reprise se déclenche au retour au premier plan, au retour du réseau, et
+  par un filet de sécurité toutes les 60 secondes. Onglet fermé, rien ne part —
+  limite connue et acceptée pour la V1.
+- **Le compte à rebours n'autorise rien.** Il s'affiche à partir de `revealAt`
+  corrigé de l'horloge du serveur, mais c'est le `status` renvoyé par l'API qui
+  décide si la capsule est ouverte (addendum section 10, point 11).
+- **Les quotas d'appels ne sont plus comptés par IP** sur les routes photo
+  authentifiées, mais par session invité (ou par organisateur) : une salle
+  entière derrière le même Wi-Fi ne se bloque plus elle-même. Détail et
+  justification en point 15 de `architecture-v1-addendum.md`, tests dans
+  `apps/api/test/rate-limit.test.ts`. Deux nouvelles variables d'environnement,
+  `SESSION_RATE_LIMIT_MAX` et `GUEST_JOIN_RATE_LIMIT_MAX` (voir `.env.example`)
+  — à reporter dans le `.env` du VPS au prochain déploiement, sans quoi les
+  valeurs par défaut s'appliquent (300 et 600, qui conviennent).
+- **Caméra en HTTPS uniquement.** Pour tester depuis un vrai téléphone sur le
+  réseau local, `http://192.168.x.x:5173` ne donnera pas accès à la caméra :
+  les navigateurs réservent `getUserMedia` aux contextes sécurisés. L'écran
+  l'explique au lieu de rester noir, mais pour tester réellement il faut passer
+  par le domaine HTTPS du VPS (ou un tunnel).
+
+### Obtenir un lien invité pour tester (en attendant la Phase 8)
+
+L'écran organisateur qui génère le QR code arrive en Phase 8 : d'ici là, on
+crée l'événement en ligne de commande et on ouvre l'URL invité à la main.
+
+```bash
+API=http://localhost:3000/api/v1
+JSON='Content-Type: application/json'
+ID="JSON.parse(require('fs').readFileSync(0,'utf8')).id"
+
+# 1. Compte organisateur (ou /auth/login si le compte existe déjà)
+TOKEN=$(curl -s -X POST $API/auth/register -H "$JSON" \
+  -d '{"email":"orga@admemrize.test","password":"MotDePasseTresSolide!42"}' \
+  | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).tokens.accessToken")
+
+# 2. Un événement qui se révèle dans 2 heures — de quoi voir un vrai compte à rebours
+DANS_2H=$(date -u -d '+2 hours' +%Y-%m-%dT%H:%M:%SZ)
+EVENT=$(curl -s -X POST $API/events -H "Authorization: Bearer $TOKEN" -H "$JSON" \
+  -d "{\"name\":\"Mariage de test\",\"type\":\"MARIAGE\",\"eventDate\":\"$DANS_2H\",\"revealAt\":\"$DANS_2H\",\"retentionHours\":24}" \
+  | node -pe "$ID")
+
+# 3. Le lien à ouvrir dans le navigateur (celui que portera le QR code)
+echo "http://localhost:5173/e/$EVENT"
+```
+
+Puis, après avoir pris des photos, vérifier ce qui est réellement arrivé côté
+serveur — sans se fier au compteur affiché dans la PWA :
+
+```bash
+docker compose exec -T postgres psql -U admemrize -d admemrize -c \
+  "SELECT p.status, p.captured_at, g.nickname
+     FROM photos p JOIN guest_sessions g ON g.id = p.guest_session_id
+    WHERE p.event_id = '<eventId>' ORDER BY p.captured_at;"
+```
+
+Trois lignes `READY` pour trois photos prises : le circuit complet (capture →
+IndexedDB → URL signée → Scaleway → confirmation → Sharp) a fonctionné.
+
+### Tests automatisés de la Phase 7
+
+```bash
+npm run test:web    # logique de la queue d'envoi (apps/web/test/)
+npm test            # tout : API + web
+```
+
+`apps/web/test/upload-sync.test.ts` tourne sur un vrai IndexedDB
+(`fake-indexeddb`) avec les appels réseau doublés : il fige le sort réservé à
+chaque type d'échec — photo rejetée par le serveur supprimée sans réessai,
+coupure réseau réessayée sans renvoyer le fichier déjà arrivé, refus de quota
+qui arrête les tentatives mais garde la photo.
 
 ### Comment tester la Phase 7 toi-même
 
@@ -533,6 +668,59 @@ Prompt à donner à Claude Code :
 3. Repasse en ligne (désactive le mode Offline) — les photos en attente
    doivent se synchroniser automatiquement en revenant sur l'onglet.
 4. Vérifie côté serveur (Phase 4) que ces photos sont bien arrivées.
+
+### Simuler une coupure réseau dans Chrome DevTools
+
+1. Ouvre la PWA, va jusqu'à l'écran caméra, prends une première photo en ligne
+   pour vérifier que le circuit complet fonctionne (le compteur passe à 1 et
+   l'écran « Révélation » n'affiche aucune photo en attente).
+2. Ouvre DevTools (`F12` ou `Ctrl+Maj+I`), onglet **Network** (Réseau).
+3. Dans la barre d'outils de cet onglet, ouvre la liste déroulante de
+   throttling — elle affiche « No throttling » par défaut, à droite de la case
+   « Disable cache » — et choisis **Offline**.
+   Variante plus complète : onglet **Network conditions** (menu `⋮` → *More
+   tools* → *Network conditions*), case **Offline**. Elle a l'avantage de
+   rester active même si tu changes d'onglet DevTools.
+4. Prends 2 ou 3 photos. Chacune doit déclencher l'animation « Souvenir
+   scellé », et le bouton « Révélation » doit afficher « N en attente de
+   réseau ». Aucun message d'erreur bloquant ne doit apparaître.
+5. Vérifie que les photos sont bien stockées : onglet **Application** →
+   *Storage* → **IndexedDB** → `admemrize` → `pending-photos`. Tu dois y voir
+   une entrée par photo, avec son `blob` et son `stage` (`TO_UPLOAD`).
+6. Repasse la liste déroulante sur **No throttling**. Deux choses peuvent
+   relancer l'envoi : l'événement `online` du navigateur (immédiat), ou le
+   retour au premier plan. Pour tester explicitement le second cas, bascule sur
+   un autre onglet puis reviens : c'est exactement le scénario iOS, où il n'y a
+   pas de Background Sync.
+7. Le compteur « en attente » doit retomber à zéro, et les entrées disparaître
+   d'IndexedDB — c'est la preuve que la suppression locale n'arrive qu'après la
+   confirmation du serveur. Vérifie enfin dans Scaleway
+   (`events/<eventId>/originals|thumbnails|previews/`) et en base
+   (`SELECT status FROM photos WHERE event_id = '<uuid>'` → `READY`).
+
+Deux pièges à connaître pour ce test :
+
+- **Le mode Offline de DevTools ne s'applique qu'à l'onglet ouvert**, et il est
+  désactivé si tu fermes DevTools. Pour couper vraiment le réseau (utile pour
+  tester sur téléphone), utilise le mode avion de l'appareil.
+- **Recharger la page en mode Offline** est un test encore plus intéressant :
+  la PWA doit rouvrir sur l'écran caméra (session relue depuis `localStorage`),
+  les photos en attente doivent toujours être là, et le compteur doit les
+  compter. C'est le scénario du téléphone qui n'a plus de réseau de toute la
+  soirée. Attention : celui-là ne marche **que sur un build de production**, le
+  service worker n'étant pas actif sous `vite dev`. Pour le faire tourner en
+  local contre l'API de dev :
+
+  ```bash
+  # Le build de prod suppose l'API sur le même domaine ; en local il faut le lui dire.
+  VITE_API_BASE_URL=http://localhost:3000 npm run build --workspace=@admemrize/web
+  npm run preview --workspace=@admemrize/web   # sert le build sur http://localhost:4173
+  ```
+
+  L'origine change (4173 au lieu de 5173) : remplace `APP_DOMAIN` par
+  `http://localhost:4173` dans `.env` et redémarre l'API — elle n'autorise
+  qu'une seule origine en CORS (`apps/api/src/app.ts`) — et ajoute cette même
+  origine à la règle CORS du bucket Scaleway ci-dessus.
 
 ## Phase 8 : PWA organisateur (dashboard, QR, settings, reveal)
 
